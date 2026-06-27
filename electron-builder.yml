@@ -1,0 +1,38 @@
+appId: vn.lamha.importer
+productName: Lamha Importer
+directories:
+  buildResources: build
+  output: dist
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!{.eslintrc,.prettierrc,tsconfig.json,tsconfig.*.json}'
+  - '!{.editorconfig,.gitignore,README.md,plans}'
+# better-sqlite3 + sharp là native → đóng gói asarUnpack để load .node / .dll libvips được
+asarUnpack:
+  - '**/*.node'
+  - 'node_modules/better-sqlite3/**'
+  - 'node_modules/sharp/**'
+  - 'node_modules/@img/**'
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-setup.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+npmRebuild: true
+# Nguồn auto-update: GitHub Releases (repo public PhongMOA/LamHaImporter).
+# electron-builder tự sinh app-update.yml từ đây; khi `--publish` sẽ upload
+# .exe + latest.yml (+ blockmap) lên Releases (KHÔNG đẩy source code).
+publish:
+  provider: github
+  owner: PhongMOA
+  repo: LamHaImporter
+  releaseType: release

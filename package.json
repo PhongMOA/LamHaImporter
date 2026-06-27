@@ -1,0 +1,49 @@
+{
+  "name": "lamha-importer",
+  "version": "0.1.1",
+  "description": "App đăng sản phẩm hàng loạt từ Excel + nội dung AI (ChatGPT bridge) cho lamha/thietbicodien",
+  "main": "./out/main/index.js",
+  "author": "PhongMOA",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "start": "electron-vite preview",
+    "postinstall": "electron-builder install-app-deps",
+    "dist": "electron-vite build && electron-builder --win",
+    "release": "electron-vite build && electron-builder --win --publish always"
+  },
+  "dependencies": {
+    "@electron-toolkit/preload": "^3.0.1",
+    "@electron-toolkit/utils": "^3.0.0",
+    "axios": "^1.7.9",
+    "axios-cookiejar-support": "^5.0.5",
+    "better-sqlite3": "^11.8.1",
+    "electron-updater": "^6.8.9",
+    "form-data": "^4.0.1",
+    "sharp": "^0.33.5",
+    "tough-cookie": "^5.1.0",
+    "ws": "^8.18.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@ant-design/icons": "^5.5.2",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.5",
+    "@types/react": "^19.0.4",
+    "@types/react-dom": "^19.0.2",
+    "@types/ws": "^8.5.13",
+    "@vitejs/plugin-react": "^4.3.4",
+    "antd": "^5.23.0",
+    "electron": "^33.3.0",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.7.3",
+    "vite": "^5.4.11"
+  }
+}
