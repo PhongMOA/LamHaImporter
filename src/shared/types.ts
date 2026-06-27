@@ -121,9 +121,12 @@ export interface JobRow {
   stage_a: StageAStatus
   // Pha B
   conversation_id: string | null
-  detail: string | null
+  detail: string | null // detail THÔ (giữ placeholder [[IMAGE: ...]]); ghép ảnh lúc upsert
   attributes_json: string | null
   seo_json: string | null // {meta_title, meta_desc, tags[]} do AI sinh (Pha B)
+  // Ảnh sơ đồ theo từng placeholder trong detail thô: [{desc, url|null}]. url=null → chưa tạo được.
+  // Lưu RIÊNG (không nướng vào detail) để chạy lại chỉ những ảnh còn thiếu. Ghép vào detail lúc upsert.
+  images_json: string | null
   reviewed: number // 0|1
   stage_b: StageBStatus
   attempts: number

@@ -61,8 +61,8 @@ export function parseSeo(answer: string, rawAnswer: string): ParsedSeo {
     if (!c) continue
     try {
       const obj = JSON.parse(c) as Record<string, unknown>
-      const meta_title = String(obj.meta_title ?? '').trim()
-      const meta_desc = String(obj.meta_desc ?? '').trim()
+      const meta_title = stripCitations(String(obj.meta_title ?? '').trim())
+      const meta_desc = stripCitations(String(obj.meta_desc ?? '').trim())
       const tags = normalizeTags(obj.tags)
       if (meta_title || meta_desc || tags.length) {
         return { meta_title, meta_desc, tags, warning: null }
@@ -74,13 +74,13 @@ export function parseSeo(answer: string, rawAnswer: string): ParsedSeo {
   return { meta_title: '', meta_desc: '', tags: [], warning: 'Không parse được JSON SEO' }
 }
 
-/** Chuẩn hoá tags: ép string, trim, bỏ rỗng, khử trùng (không phân biệt hoa/thường). */
+/** Chuẩn hoá tags: ép string, trim, gỡ citation, bỏ rỗng, khử trùng (không phân biệt hoa/thường). */
 function normalizeTags(raw: unknown): string[] {
   if (!Array.isArray(raw)) return []
   const seen = new Set<string>()
   const out: string[] = []
   for (const t of raw) {
-    const s = String(t ?? '').trim()
+    const s = stripCitations(String(t ?? '').trim()).trim()
     const key = s.toLowerCase()
     if (s && !seen.has(key)) {
       seen.add(key)
@@ -97,6 +97,26 @@ function extractJsonObjectLoose(text: string): string | null {
   const end = text.lastIndexOf('}')
   if (start >= 0 && end > start) return text.slice(start, end + 1)
   return null
+}
+
+/**
+ * Gỡ marker trích dẫn nội bộ của ChatGPT lọt vào text khi lấy thô qua bridge.
+ * Trên web các marker này render thành icon nguồn bấm được; text thô thì trơ cú pháp:
+ *   - ":contentReference[oaicite:0]{index=0}"  (citation chuẩn)
+ *   - "[oaicite:0]" / "{index=0}" lẻ (phòng khi đứt đôi)
+ *   - "[12†nguon]" dạng turn-citation dùng ngoặc góc đặc biệt (U+3010 ... U+3011, dấu U+2020)
+ *   - ký tự Private-Use (U+E200..U+E2FF) mà UI dùng bọc citation
+ * Gộp luôn khoảng trắng thừa đứng trước marker để không để lại "  ." cuối câu.
+ */
+export function stripCitations(text: string): string {
+  if (!text) return text
+  return text
+    .replace(/[ \t]*:contentReference\[oaicite:\d+\]\{index=\d+\}/gi, '')
+    .replace(/[ \t]*\[oaicite:\d+\]/gi, '')
+    .replace(/\{index=\d+\}/gi, '')
+    .replace(/[ \t]*【[^】]*†[^】]*】/g, '')
+    .replace(/[-]/g, '')
+    .replace(/[ \t]+([.,;:!?)])/g, '$1') // dọn khoảng trắng lẻ trước dấu câu sau khi gỡ
 }
 
 /** Token placeholder ảnh do AI chèn trong detail: `[[IMAGE: mô tả sơ đồ...]]`. */
@@ -117,11 +137,12 @@ export function replaceImagePlaceholder(html: string, replacement: string): stri
 }
 
 /** Làm sạch detail HTML trước khi đăng:
+ *  - Gỡ marker trích dẫn ChatGPT (:contentReference[oaicite...], 【…†…】, ký tự PUA).
  *  - Bỏ <img> có src TUYỆT ĐỐI (http/https/data/protocol-relative) — AI hay bịa URL ngoài → ảnh vỡ.
  *  - GIỮ <img> src NỘI BỘ (bắt đầu '/...') vì đó là ảnh sơ đồ ta tự tải về & upload lên server.
  *  - Bỏ vỏ <figure>/<picture> rỗng và các <p></p> rỗng (ví dụ sau khi gỡ placeholder). */
 export function sanitizeDetail(html: string): string {
-  return html
+  return stripCitations(html)
     .replace(/<img\b[^>]*>/gi, (tag) => {
       const m = tag.match(/\bsrc\s*=\s*["']([^"']*)["']/i)
       const src = (m ? m[1] : '').trim()

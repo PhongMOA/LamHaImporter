@@ -2,8 +2,10 @@
 // Pha B — Enrich nội dung AI + upsert (durable, resumable).
 //
 // State machine:
-//   pending → generating → content(detail+attributes) → enriched(PUT) → done
-// Sinh đủ nội dung là tự upsert luôn (không còn cổng duyệt tay).
+//   pending → generating → content(ĐỦ 4 task) → enriched(PUT) → done
+// 4 task: detail (HTML thô, giữ placeholder) · attributes (JSON) · ảnh sơ đồ (mỗi placeholder=1 ảnh) · SEO.
+// Mỗi task xong là CHECKPOINT vào DB → chạy lại chỉ làm nốt task còn thiếu.
+// CHỈ khi đủ cả 4 task mới upsert lên web; thiếu bất kỳ task nào → đánh 'error', KHÔNG đăng.
 //
 // Tuần tự (Bridge 1 job/lần), throttle né rate-limit, retry backoff, resume qua queue.
 // ============================================================================
@@ -51,7 +53,50 @@ export function cancelStageB(runId?: string): void {
   activeStageB.ctrl.cancelled = true
 }
 
-/** Sinh detail + attributes cho 1 job (nếu chưa có content). */
+/** 1 ảnh sơ đồ ứng với 1 placeholder trong detail thô. url=null → chưa tạo được. */
+interface ImageSlot {
+  desc: string
+  url: string | null
+}
+
+function safeParseAttributes(json: string | null): Attribute[] {
+  if (!json) return []
+  try {
+    const a = JSON.parse(json)
+    return Array.isArray(a) ? (a as Attribute[]) : []
+  } catch {
+    return []
+  }
+}
+
+function safeParseImages(json: string | null): ImageSlot[] {
+  if (!json) return []
+  try {
+    const a = JSON.parse(json)
+    return Array.isArray(a) ? (a as ImageSlot[]) : []
+  } catch {
+    return []
+  }
+}
+
+/** SEO "đủ dữ liệu" = có cả meta_title, meta_desc và ít nhất 1 tag. */
+function isSeoComplete(seoJson: string | null): boolean {
+  if (!seoJson) return false
+  try {
+    const s = JSON.parse(seoJson) as { meta_title?: string; meta_desc?: string; tags?: unknown }
+    return !!(s.meta_title && s.meta_desc && Array.isArray(s.tags) && s.tags.length > 0)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Sinh nội dung 4 task cho 1 job, CHECKPOINT từng task → chạy lại chỉ task còn thiếu.
+ * Task: 1) detail (HTML thô, giữ placeholder)  2) attributes (JSON)
+ *       3) ảnh sơ đồ (mỗi placeholder = 1 ảnh)  4) SEO (title+desc+tags).
+ * Mỗi task xong là lưu DB ngay. CUỐI CÙNG nếu CHƯA đủ cả 4 → THROW (để KHÔNG upsert; withRetry
+ * thử lại đúng task thiếu, hết lượt thì đánh 'error'). Đủ cả 4 → set 'content' để runner upsert.
+ */
 async function generateContent(
   job: JobRow,
   client: SiteClient,
@@ -59,9 +104,6 @@ async function generateContent(
 ): Promise<void> {
   const draft = queueStore.getDraft(job)
   const base: StageProgress = { jobId: job.id, rowIndex: job.row_index, title: job.title, status: '' }
-
-  // đã có content (resume) → bỏ qua sinh lại
-  if (job.detail && job.attributes_json) return
 
   // Thông tin site để CTA "nơi mua hàng" trỏ đúng về web mình (tên + URL).
   const cfg = configStore.get()
@@ -76,127 +118,157 @@ async function generateContent(
   }
 
   queueStore.markStageB(job.id, { stage_b: 'generating' })
-  emit({ ...base, status: 'generating', message: 'Đang sinh mô tả (AI)...' })
 
-  // 1) detail (HTML) — conversation mới
-  const detailRes = await embeddedBridge.ask(buildDetailPrompt(draft, sitePromptInfo, imageRequests), {
-    newChat: true,
-    extract: { type: 'code', lang: 'html' }
-  })
-  let detail = detailRes.answer
-  if (!detail || !validateDetail(detail).ok) {
-    // fallback: dùng rawAnswer nếu extract rỗng nhưng có nội dung
-    if (detailRes.rawAnswer && validateDetail(detailRes.rawAnswer).ok) detail = detailRes.rawAnswer
-  }
-  // Gate: KHÔNG cho qua 'content' với detail rỗng/quá ngắn — nếu không job sẽ kẹt vĩnh viễn
-  // ở 'content' (nextStageBGenerate chỉ chọn pending/generating) và đăng nội dung rỗng.
-  // Ném lỗi để withRetry thử lại; quá số lần thì chuyển 'error' (thấy được, không im lặng).
-  if (!validateDetail(detail).ok) {
-    throw new Error(`AI trả mô tả rỗng/quá ngắn${detailRes.extractWarning ? ` (${detailRes.extractWarning})` : ''}`)
-  }
-  // Bỏ mọi <img> AI tự chèn (URL bịa → ảnh vỡ); chỉ giữ phần chữ.
-  detail = sanitizeDetail(detail)
-  const conversationId = detailRes.conversationId
+  // ----- nạp checkpoint đã có (để chạy lại chỉ task còn thiếu) -----
+  let rawDetail = job.detail || '' // detail THÔ, còn placeholder [[IMAGE: ...]]
+  let conversationId = job.conversation_id || null
+  let attributes = safeParseAttributes(job.attributes_json)
+  let seoJson = job.seo_json
+  let images = safeParseImages(job.images_json)
+  const failures: string[] = []
 
-  // 2) attributes (JSON) — cùng conversation
-  emit({ ...base, status: 'generating', message: 'Đang sinh thông số (AI)...' })
-  const specRes = await embeddedBridge.ask(buildSpecPrompt(draft), {
-    conversationId: conversationId || undefined,
-    extract: { type: 'code', lang: 'json' }
-  })
-  const { attributes, warning } = parseAttributes(specRes.answer, specRes.rawAnswer)
-
-  // 3) ảnh sơ đồ (mỗi placeholder = 1 ảnh): tách mô tả → nhờ AI vẽ → tải về → up lên server → chèn URL.
-  //    Best-effort: ảnh lỗi thì gỡ placeholder đó (không chặn upsert), gộp cảnh báo vào last_error.
-  //    Xử lý tuần tự theo thứ tự xuất hiện; replaceImagePlaceholder luôn thay placeholder ĐẦU còn lại
-  //    → khớp đúng mô tả đang xử lý (cái đã chèn <img> không còn match nữa).
-  const imgDescs = extractImagePlaceholders(detail)
-  const imgWarnings: string[] = []
-  for (let i = 0; i < imgDescs.length; i++) {
-    const imgDesc = imgDescs[i]
-    if (!job.product_id) {
-      // thiếu product_id (bất thường) → gỡ token để không đăng thô
-      detail = replaceImagePlaceholder(detail, '')
-      continue
-    }
-    emit({ ...base, status: 'generating', message: `Đang tạo ảnh ${i + 1}/${imgDescs.length} (AI)...` })
-    try {
-      const imgRes = await embeddedBridge.ask(buildDetailImagePrompt(draft, imgDesc), {
-        conversationId: conversationId || undefined,
-        image: true,
-        timeoutMs: 220_000
-      })
-      const dataUrl = (imgRes.images || []).find((u) => !!u)
-      if (!dataUrl) throw new Error('AI không trả ảnh')
-      const decoded = decodeDataUrl(dataUrl)
-      // Tối ưu dung lượng + chuyển webp trước khi up (ảnh AI thường là PNG nặng).
-      // Lỗi xử lý → fallback ảnh gốc (không chặn việc chèn ảnh/upsert).
-      let buffer = decoded.buffer
-      let ext = decoded.ext
-      if (cfg.imageProcess.enabled) {
-        try {
-          const opt = await processDetailImageBuffer(decoded.buffer, cfg.imageProcess)
-          buffer = opt.buffer
-          ext = opt.ext
-        } catch {
-          /* giữ ảnh gốc */
-        }
-      }
-      const url = await client.uploadDetailImage(
-        job.product_id,
-        buffer,
-        `so-do-${job.row_index}-${i + 1}.${ext}`
-      )
-      detail = replaceImagePlaceholder(detail, `<img src="${url}" alt="${escapeAttr(imgDesc)}">`)
-      emit({ ...base, status: 'content', message: `Đã chèn ảnh ${i + 1}/${imgDescs.length}` })
-    } catch (e) {
-      const w = `Ảnh ${i + 1} lỗi: ${(e as Error).message}`
-      imgWarnings.push(w)
-      detail = replaceImagePlaceholder(detail, '') // gỡ placeholder để không lộ token thô
-      emit({ ...base, status: 'content', message: w })
-    }
-  }
-  const imgWarning = imgWarnings.length ? imgWarnings.join('; ') : null
-  detail = sanitizeDetail(detail) // chốt: giữ <img> nội bộ, dọn <p> rỗng nếu đã gỡ placeholder
-
-  // 4) SEO: Title SEO + Meta description + tags (cùng conversation → AI bám ngữ cảnh bài vừa viết).
-  //    Best-effort: lỗi/parse fail thì bỏ qua (SEO rỗng → web giữ meta_title auto theo title), không chặn upsert.
-  emit({ ...base, status: 'generating', message: 'Đang sinh SEO (AI)...' })
-  let seoJson: string | null = null
-  let seoWarning: string | null = null
-  try {
-    const seoRes = await embeddedBridge.ask(buildSeoPrompt(draft), {
-      conversationId: conversationId || undefined,
-      extract: { type: 'code', lang: 'json' }
+  // ===== Task 1: detail (HTML thô) =====
+  if (!rawDetail || !validateDetail(rawDetail).ok) {
+    emit({ ...base, status: 'generating', message: 'Đang sinh mô tả (AI)...' })
+    const detailRes = await embeddedBridge.ask(buildDetailPrompt(draft, sitePromptInfo, imageRequests), {
+      newChat: true,
+      extract: { type: 'code', lang: 'html' }
     })
-    const seo = parseSeo(seoRes.answer, seoRes.rawAnswer)
-    seoWarning = seo.warning
-    if (seo.meta_title || seo.meta_desc || seo.tags.length) {
-      seoJson = JSON.stringify({ meta_title: seo.meta_title, meta_desc: seo.meta_desc, tags: seo.tags })
+    let d = detailRes.answer
+    if (!d || !validateDetail(d).ok) {
+      if (detailRes.rawAnswer && validateDetail(detailRes.rawAnswer).ok) d = detailRes.rawAnswer
     }
-  } catch (e) {
-    seoWarning = `SEO lỗi: ${(e as Error).message}`
-    emit({ ...base, status: 'content', message: seoWarning })
+    if (!validateDetail(d).ok) {
+      failures.push(`Mô tả rỗng/quá ngắn${detailRes.extractWarning ? ` (${detailRes.extractWarning})` : ''}`)
+    } else {
+      rawDetail = sanitizeDetail(d) // sanitizeDetail GIỮ placeholder [[IMAGE]], chỉ bỏ <img> bịa
+      conversationId = detailRes.conversationId || conversationId
+      images = [] // detail mới → placeholder mới → bỏ ảnh cũ, sẽ tạo lại
+      queueStore.markStageB(job.id, {
+        detail: rawDetail,
+        conversation_id: conversationId,
+        images_json: JSON.stringify(images)
+      })
+    }
+  }
+  const detailOk = !!rawDetail && validateDetail(rawDetail).ok
+
+  // ===== Task 2: attributes (JSON) — prompt tự chứa ngữ cảnh, chạy lại lẻ được =====
+  if (attributes.length === 0) {
+    emit({ ...base, status: 'generating', message: 'Đang sinh thông số (AI)...' })
+    try {
+      const specRes = await embeddedBridge.ask(buildSpecPrompt(draft), {
+        conversationId: conversationId || undefined,
+        extract: { type: 'code', lang: 'json' }
+      })
+      const parsed = parseAttributes(specRes.answer, specRes.rawAnswer)
+      if (parsed.attributes.length > 0) {
+        attributes = parsed.attributes
+        queueStore.markStageB(job.id, { attributes_json: JSON.stringify(attributes) })
+      } else {
+        failures.push(parsed.warning || 'Thông số rỗng/không parse được')
+      }
+    } catch (e) {
+      failures.push(`Thông số lỗi: ${(e as Error).message}`)
+    }
   }
 
-  queueStore.markStageB(job.id, {
-    stage_b: 'content',
-    detail,
-    attributes_json: JSON.stringify(attributes),
-    seo_json: seoJson,
-    conversation_id: conversationId,
-    last_error: [imgWarning, warning, seoWarning].filter(Boolean).join('; ') || null
-  })
-  emit({ ...base, status: 'content', message: `Có nội dung (${attributes.length} thông số)` })
+  // ===== Task 3: ảnh sơ đồ — chỉ chạy khi đã có detail; mỗi placeholder = 1 ảnh =====
+  if (detailOk) {
+    const descs = extractImagePlaceholders(rawDetail)
+    // đồng bộ slot theo placeholder hiện tại, GIỮ url đã có (theo index) để không vẽ lại ảnh đã xong
+    images = descs.map((desc, i) => ({ desc, url: images[i]?.url ?? null }))
+    for (let i = 0; i < descs.length; i++) {
+      if (images[i].url) continue // đã có ảnh → bỏ qua
+      if (!job.product_id) {
+        failures.push('Thiếu product_id để upload ảnh')
+        break
+      }
+      emit({ ...base, status: 'generating', message: `Đang tạo ảnh ${i + 1}/${descs.length} (AI)...` })
+      try {
+        const imgRes = await embeddedBridge.ask(buildDetailImagePrompt(draft, descs[i]), {
+          conversationId: conversationId || undefined,
+          image: true,
+          timeoutMs: 220_000
+        })
+        const dataUrl = (imgRes.images || []).find((u) => !!u)
+        if (!dataUrl) throw new Error('AI không trả ảnh')
+        const decoded = decodeDataUrl(dataUrl)
+        let buffer = decoded.buffer
+        let ext = decoded.ext
+        if (cfg.imageProcess.enabled) {
+          try {
+            const opt = await processDetailImageBuffer(decoded.buffer, cfg.imageProcess)
+            buffer = opt.buffer
+            ext = opt.ext
+          } catch {
+            /* giữ ảnh gốc */
+          }
+        }
+        const url = await client.uploadDetailImage(
+          job.product_id,
+          buffer,
+          `so-do-${job.row_index}-${i + 1}.${ext}`
+        )
+        images[i].url = url
+        queueStore.markStageB(job.id, { images_json: JSON.stringify(images) }) // checkpoint từng ảnh
+        emit({ ...base, status: 'content', message: `Đã tạo ảnh ${i + 1}/${descs.length}` })
+      } catch (e) {
+        failures.push(`Ảnh ${i + 1} lỗi: ${(e as Error).message}`)
+      }
+    }
+  }
+
+  // ===== Task 4: SEO (title + desc + tags) — prompt tự chứa ngữ cảnh =====
+  if (!isSeoComplete(seoJson)) {
+    emit({ ...base, status: 'generating', message: 'Đang sinh SEO (AI)...' })
+    try {
+      const seoRes = await embeddedBridge.ask(buildSeoPrompt(draft), {
+        conversationId: conversationId || undefined,
+        extract: { type: 'code', lang: 'json' }
+      })
+      const seo = parseSeo(seoRes.answer, seoRes.rawAnswer)
+      if (seo.meta_title && seo.meta_desc && seo.tags.length > 0) {
+        seoJson = JSON.stringify({ meta_title: seo.meta_title, meta_desc: seo.meta_desc, tags: seo.tags })
+        queueStore.markStageB(job.id, { seo_json: seoJson })
+      } else {
+        failures.push('SEO thiếu dữ liệu (cần đủ tiêu đề, mô tả và tags)')
+      }
+    } catch (e) {
+      failures.push(`SEO lỗi: ${(e as Error).message}`)
+    }
+  }
+
+  // ===== Chốt: đủ cả 4 task chưa? =====
+  const imagesOk = detailOk && extractImagePlaceholders(rawDetail).every((_, i) => !!images[i]?.url)
+  const allOk = detailOk && attributes.length > 0 && imagesOk && isSeoComplete(seoJson)
+
+  if (allOk) {
+    queueStore.markStageB(job.id, { stage_b: 'content', last_error: null })
+    emit({ ...base, status: 'content', message: `Đủ nội dung (${attributes.length} thông số)` })
+    return
+  }
+  // Chưa đủ → THROW để KHÔNG upsert. withRetry sẽ chạy lại đúng task còn thiếu (đã checkpoint),
+  // hết lượt thì đánh 'error' (vẫn giữ phần đã có để "chạy lại" sau chỉ làm nốt phần thiếu).
+  const msg = failures.length ? failures.join('; ') : 'Thiếu dữ liệu nội dung'
+  queueStore.markStageB(job.id, { last_error: msg })
+  throw new Error(msg)
 }
 
-/** Upsert detail + attributes vào SP đã tạo ở Pha A. */
+/** Upsert detail + attributes vào SP đã tạo ở Pha A. Ghép ảnh (images_json) vào detail thô. */
 async function upsertContent(job: JobRow, client: SiteClient, emit: (p: StageProgress) => void): Promise<void> {
   const base: StageProgress = { jobId: job.id, rowIndex: job.row_index, title: job.title, status: '' }
   if (!job.product_id) throw new Error('Thiếu product_id (Pha A chưa xong)')
 
-  const detail = sanitizeDetail(job.detail || '') // dọn lại <img> kể cả content sinh từ trước
-  const attributes: Attribute[] = job.attributes_json ? JSON.parse(job.attributes_json) : []
+  // Ghép ảnh đã tạo vào detail thô: thay từng placeholder ĐẦU còn lại bằng <img> tương ứng (đúng thứ tự).
+  let detail = job.detail || ''
+  for (const slot of safeParseImages(job.images_json)) {
+    const tag = slot.url ? `<img src="${slot.url}" alt="${escapeAttr(slot.desc)}">` : ''
+    detail = replaceImagePlaceholder(detail, tag)
+  }
+  detail = sanitizeDetail(detail) // dọn <img> bịa + gỡ placeholder sót (nếu có) qua bước kế
+  detail = detail.replace(/<p>\s*\[\[IMAGE:[\s\S]*?\]\]\s*<\/p>/gi, '').replace(/\[\[IMAGE:[\s\S]*?\]\]/gi, '')
+  const attributes: Attribute[] = safeParseAttributes(job.attributes_json)
 
   // chỉ gửi field bổ sung để không đụng field Pha A đã set
   const form: Record<string, unknown> = { detail, attributes }
@@ -228,7 +300,8 @@ async function upsertContent(job: JobRow, client: SiteClient, emit: (p: StagePro
   emit({ ...base, status: 'done', message: 'Đã enrich xong' })
 }
 
-/** Chạy Pha B cho run: pass 1 sinh content (tất cả), pass 2 tự upsert.
+/** Chạy Pha B cho run: mỗi SP sinh đủ 4 task (checkpoint từng task) rồi mới upsert.
+ *  Thiếu bất kỳ task nào → KHÔNG upsert, đánh 'error'; "chạy lại" chỉ làm nốt task thiếu.
  *  Tuần tự + throttle + retry. Resume an toàn qua queue. */
 export async function runStageB(runId: string, siteId: string, emit: (p: StageProgress) => void): Promise<void> {
   const cfg = configStore.get()

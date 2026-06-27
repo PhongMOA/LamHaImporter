@@ -38,16 +38,19 @@ class QueueStore {
         model TEXT, title TEXT, draft_json TEXT,
         product_id TEXT, images_done INTEGER DEFAULT 0, images_total INTEGER DEFAULT 0,
         stage_a TEXT DEFAULT 'pending',
-        conversation_id TEXT, detail TEXT, attributes_json TEXT, seo_json TEXT,
+        conversation_id TEXT, detail TEXT, attributes_json TEXT, seo_json TEXT, images_json TEXT,
         reviewed INTEGER DEFAULT 0, stage_b TEXT DEFAULT 'pending',
         attempts INTEGER DEFAULT 0, last_error TEXT, updated_at INTEGER
       );
       CREATE INDEX IF NOT EXISTS idx_jobs_run ON jobs(run_id);
     `)
-    // Migration: thêm cột seo_json cho DB tạo trước khi có bước SEO (ALTER idempotent qua table_info).
+    // Migration: thêm cột mới cho DB tạo trước (ALTER idempotent qua table_info).
     const cols = db.prepare(`PRAGMA table_info(jobs)`).all() as { name: string }[]
     if (!cols.some((c) => c.name === 'seo_json')) {
       db.exec(`ALTER TABLE jobs ADD COLUMN seo_json TEXT`)
+    }
+    if (!cols.some((c) => c.name === 'images_json')) {
+      db.exec(`ALTER TABLE jobs ADD COLUMN images_json TEXT`)
     }
     this.db = db
     return db
@@ -102,7 +105,7 @@ class QueueStore {
         `UPDATE jobs SET
            stage_a = 'pending', stage_b = 'pending',
            product_id = NULL, images_done = 0,
-           conversation_id = NULL, detail = NULL, attributes_json = NULL, seo_json = NULL,
+           conversation_id = NULL, detail = NULL, attributes_json = NULL, seo_json = NULL, images_json = NULL,
            reviewed = 0, attempts = 0, last_error = NULL,
            updated_at = @now
          WHERE run_id = @runId`
@@ -182,7 +185,7 @@ class QueueStore {
 
   markStageB(
     id: string,
-    patch: Partial<Pick<JobRow, 'stage_b' | 'conversation_id' | 'detail' | 'attributes_json' | 'seo_json' | 'attempts' | 'last_error'>>
+    patch: Partial<Pick<JobRow, 'stage_b' | 'conversation_id' | 'detail' | 'attributes_json' | 'seo_json' | 'images_json' | 'attempts' | 'last_error'>>
   ): void {
     this.patchJob(id, patch)
   }
