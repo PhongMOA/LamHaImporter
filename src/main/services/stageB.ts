@@ -94,14 +94,15 @@ function isSeoComplete(seoJson: string | null): boolean {
  * Sinh nội dung 4 task cho 1 job, CHECKPOINT từng task → chạy lại chỉ task còn thiếu.
  * Task: 1) detail (HTML thô, giữ placeholder)  2) attributes (JSON)
  *       3) ảnh sơ đồ (mỗi placeholder = 1 ảnh)  4) SEO (title+desc+tags).
- * Mỗi task xong là lưu DB ngay. CUỐI CÙNG nếu CHƯA đủ cả 4 → THROW (để KHÔNG upsert; withRetry
- * thử lại đúng task thiếu, hết lượt thì đánh 'error'). Đủ cả 4 → set 'content' để runner upsert.
+ * Mỗi task xong là lưu DB ngay. CUỐI CÙNG nếu CHƯA đủ cả 4 → đánh 'error' NGAY (KHÔNG throw, KHÔNG
+ * tự chạy lại) rồi return false. Đủ cả 4 → set 'content', return true để runner upsert.
+ * User bấm "chạy lại" (retryErrors) sẽ đưa job error về pending; nhờ checkpoint chỉ làm nốt task thiếu.
  */
 async function generateContent(
   job: JobRow,
   client: SiteClient,
   emit: (p: StageProgress) => void
-): Promise<void> {
+): Promise<boolean> {
   const draft = queueStore.getDraft(job)
   const base: StageProgress = { jobId: job.id, rowIndex: job.row_index, title: job.title, status: '' }
 
@@ -149,6 +150,7 @@ async function generateContent(
         conversation_id: conversationId,
         images_json: JSON.stringify(images)
       })
+      emit({ ...base, status: 'content', message: '✓ Xong mô tả' })
     }
   }
   const detailOk = !!rawDetail && validateDetail(rawDetail).ok
@@ -165,6 +167,7 @@ async function generateContent(
       if (parsed.attributes.length > 0) {
         attributes = parsed.attributes
         queueStore.markStageB(job.id, { attributes_json: JSON.stringify(attributes) })
+        emit({ ...base, status: 'content', message: `✓ Xong thông số (${attributes.length} dòng)` })
       } else {
         failures.push(parsed.warning || 'Thông số rỗng/không parse được')
       }
@@ -212,7 +215,7 @@ async function generateContent(
         )
         images[i].url = url
         queueStore.markStageB(job.id, { images_json: JSON.stringify(images) }) // checkpoint từng ảnh
-        emit({ ...base, status: 'content', message: `Đã tạo ảnh ${i + 1}/${descs.length}` })
+        emit({ ...base, status: 'content', message: `✓ Xong ảnh ${i + 1}/${descs.length}` })
       } catch (e) {
         failures.push(`Ảnh ${i + 1} lỗi: ${(e as Error).message}`)
       }
@@ -231,6 +234,7 @@ async function generateContent(
       if (seo.meta_title && seo.meta_desc && seo.tags.length > 0) {
         seoJson = JSON.stringify({ meta_title: seo.meta_title, meta_desc: seo.meta_desc, tags: seo.tags })
         queueStore.markStageB(job.id, { seo_json: seoJson })
+        emit({ ...base, status: 'content', message: `✓ Xong SEO (${seo.tags.length} tags)` })
       } else {
         failures.push('SEO thiếu dữ liệu (cần đủ tiêu đề, mô tả và tags)')
       }
@@ -245,14 +249,15 @@ async function generateContent(
 
   if (allOk) {
     queueStore.markStageB(job.id, { stage_b: 'content', last_error: null })
-    emit({ ...base, status: 'content', message: `Đủ nội dung (${attributes.length} thông số)` })
-    return
+    emit({ ...base, status: 'content', message: `✓ Đủ 4 task (${attributes.length} thông số) — chờ đăng` })
+    return true
   }
-  // Chưa đủ → THROW để KHÔNG upsert. withRetry sẽ chạy lại đúng task còn thiếu (đã checkpoint),
-  // hết lượt thì đánh 'error' (vẫn giữ phần đã có để "chạy lại" sau chỉ làm nốt phần thiếu).
+  // Chưa đủ → đánh 'error' NGAY, KHÔNG upsert, KHÔNG tự chạy lại. Vẫn giữ phần đã checkpoint;
+  // user bấm "chạy lại" → retryErrors đưa về pending, lần sau chỉ làm nốt task còn thiếu.
   const msg = failures.length ? failures.join('; ') : 'Thiếu dữ liệu nội dung'
-  queueStore.markStageB(job.id, { last_error: msg })
-  throw new Error(msg)
+  queueStore.markStageB(job.id, { stage_b: 'error', last_error: msg })
+  emit({ ...base, status: 'error', message: msg })
+  return false
 }
 
 /** Upsert detail + attributes vào SP đã tạo ở Pha A. Ghép ảnh (images_json) vào detail thô. */
@@ -314,39 +319,24 @@ export async function runStageB(runId: string, siteId: string, emit: (p: StagePr
   activeStageB = { runId, ctrl }
   const throttle = cfg.throttleMs ?? 1500
 
-  const withRetry = async (job: JobRow, fn: () => Promise<void>): Promise<boolean> => {
-    try {
-      await fn()
-      return true
-    } catch (e) {
-      const msg = (e as Error).message
-      const attempts = job.attempts + 1
-      if (attempts <= 3 && !ctrl.cancelled) {
-        queueStore.markStageB(job.id, { attempts, last_error: msg })
-        await sleep(Math.min(10_000, 2000 * attempts))
-        return false // sẽ được nextStage* trả lại để thử tiếp
-      }
-      queueStore.markStageB(job.id, { stage_b: 'error', last_error: msg, attempts })
-      emit({ jobId: job.id, rowIndex: job.row_index, title: job.title, status: 'error', message: msg })
-      return true // coi như "đã xử lý" (error), khỏi lặp vô hạn
-    }
-  }
-
   try {
-    // 1 pha xen kẽ: mỗi sản phẩm sinh content (nếu chưa có) rồi UPSERT đăng luôn.
-    // → tiến trình tăng theo từng SP (không đứng 0% suốt lúc sinh content cả lô),
-    //   và SP lên web ngay; nếu dừng giữa chừng thì các SP đã xử lý đã đăng xong.
+    // 1 pha xen kẽ: mỗi sản phẩm sinh content (nếu chưa đủ) rồi UPSERT đăng luôn.
+    // → tiến trình tăng theo từng SP; SP lên web ngay; dừng giữa chừng thì SP đã xử lý đã đăng xong.
+    // KHÔNG tự retry: thiếu task nào → generateContent đánh 'error' ngay (nextStageB sẽ bỏ qua job
+    //   error nên KHÔNG lặp lại job đó). User bấm "chạy lại" mới đưa job error về pending.
     let job = queueStore.nextStageB(runId)
     while (job && !ctrl.cancelled) {
-      const done = await withRetry(job, async () => {
-        await generateContent(job!, client, emit) // idempotent: có content rồi thì bỏ qua sinh lại
-        const fresh = queueStore.getJob(job!.id)
-        if (fresh) await upsertContent(fresh, client, emit)
-      })
-      if (!done) {
-        // retry transient → reload và thử lại đúng job này (generate sẽ tự bỏ qua)
-        job = queueStore.getJob(job.id)
-        continue
+      try {
+        const ok = await generateContent(job, client, emit) // đủ 4 task → true; thiếu → tự đánh error → false
+        if (ok) {
+          const fresh = queueStore.getJob(job.id)
+          if (fresh) await upsertContent(fresh, client, emit)
+        }
+      } catch (e) {
+        // lỗi cứng (extension rớt, mạng, upsert lỗi...) → đánh 'error', KHÔNG tự chạy lại.
+        const msg = (e as Error).message
+        queueStore.markStageB(job.id, { stage_b: 'error', last_error: msg })
+        emit({ jobId: job.id, rowIndex: job.row_index, title: job.title, status: 'error', message: msg })
       }
       await sleep(throttle)
       job = queueStore.nextStageB(runId)
