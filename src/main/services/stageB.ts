@@ -23,6 +23,7 @@ import {
   replaceImagePlaceholder
 } from './contentValidator'
 import type { StageProgress, RunController } from './stageA'
+import { processDetailImageBuffer } from './image'
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -127,7 +128,20 @@ async function generateContent(
       })
       const dataUrl = (imgRes.images || []).find((u) => !!u)
       if (!dataUrl) throw new Error('AI không trả ảnh')
-      const { buffer, ext } = decodeDataUrl(dataUrl)
+      const decoded = decodeDataUrl(dataUrl)
+      // Tối ưu dung lượng + chuyển webp trước khi up (ảnh AI thường là PNG nặng).
+      // Lỗi xử lý → fallback ảnh gốc (không chặn việc chèn ảnh/upsert).
+      let buffer = decoded.buffer
+      let ext = decoded.ext
+      if (cfg.imageProcess.enabled) {
+        try {
+          const opt = await processDetailImageBuffer(decoded.buffer, cfg.imageProcess)
+          buffer = opt.buffer
+          ext = opt.ext
+        } catch {
+          /* giữ ảnh gốc */
+        }
+      }
       const url = await client.uploadDetailImage(
         job.product_id,
         buffer,

@@ -103,3 +103,25 @@ export async function processImage(
   const base = basename(filePath, extname(filePath))
   return { buffer, filename: `${base}.webp` }
 }
+
+// Giới hạn cạnh dài tối đa cho ảnh nội dung (sơ đồ AI vẽ) — đủ nét trong bài, không phình dung lượng.
+const DETAIL_MAX_DIM = 1200
+
+/**
+ * Tối ưu ảnh NỘI DUNG (ảnh AI vẽ chèn trong mô tả) trước khi upload: nén + chuyển webp.
+ * Khác processImage: KHÔNG ép ô vuông — sơ đồ là ảnh ngang, chỉ thu trong khung
+ * DETAIL_MAX_DIM × DETAIL_MAX_DIM giữ nguyên tỉ lệ (không phóng to ảnh nhỏ).
+ * Nhận buffer (ảnh base64 do AI trả). Trả buffer webp + đuôi 'webp'.
+ */
+export async function processDetailImageBuffer(
+  input: Buffer,
+  cfg: ImageProcessConfig
+): Promise<{ buffer: Buffer; ext: 'webp' }> {
+  const buffer = await sharp(input, { failOn: 'none' })
+    .rotate() // áp EXIF orientation trước khi resize
+    .resize(DETAIL_MAX_DIM, DETAIL_MAX_DIM, { fit: 'inside', withoutEnlargement: true })
+    .flatten({ background: WHITE }) // sơ đồ nền trắng → bỏ alpha cho nhẹ
+    .webp({ quality: cfg.quality })
+    .toBuffer()
+  return { buffer, ext: 'webp' }
+}
