@@ -15,6 +15,7 @@ import { parseExcel } from './services/excel'
 import { runStageA, cancelStageA, type StageProgress } from './services/stageA'
 import { runStageB, cancelStageB } from './services/stageB'
 import { rerollRun } from './services/reroll'
+import { checkForUpdate, downloadUpdate, installUpdate } from './updater'
 
 function broadcast(channel: string, payload: unknown): void {
   for (const w of BrowserWindow.getAllWindows()) w.webContents.send(channel, payload)
@@ -148,6 +149,11 @@ export function registerIpc(): void {
     cancelStageA(runId)
     cancelStageB(runId)
   })
+
+  // ---------------------------------------------------------------- update
+  ipcMain.handle(IPC.updateCheck, () => checkForUpdate())
+  ipcMain.handle(IPC.updateDownload, () => downloadUpdate())
+  ipcMain.handle(IPC.updateInstall, () => installUpdate())
 
   // ---------------------------------------------------------------- bridge status → renderer
   embeddedBridge.on('extension', () => broadcast(IPC.evtBridgeStatus, embeddedBridge.health()))

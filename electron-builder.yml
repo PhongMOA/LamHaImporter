@@ -21,7 +21,9 @@ win:
     - target: nsis
       arch:
         - x64
-  artifactName: ${productName}-${version}-setup.${ext}
+  # Tên file KHÔNG dấu cách: GitHub Releases đổi dấu cách thành '.', làm lệch
+  # với url trong latest.yml (dùng '-') → electron-updater 404. Cố định tên gạch ngang.
+  artifactName: Lamha-Importer-${version}-setup.${ext}
 nsis:
   oneClick: false
   perMachine: false

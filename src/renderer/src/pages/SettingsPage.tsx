@@ -15,7 +15,7 @@ import {
   Divider,
   Popconfirm
 } from 'antd'
-import { PlusOutlined, DeleteOutlined, ApiOutlined, EditOutlined } from '@ant-design/icons'
+import { PlusOutlined, DeleteOutlined, ApiOutlined, EditOutlined, CloudSyncOutlined } from '@ant-design/icons'
 import type { SiteTarget } from '@shared/types'
 import { useStore } from '../store'
 
@@ -27,6 +27,12 @@ export function SettingsPage(): React.ReactElement {
   const [imageForm] = Form.useForm()
   const [imgReqForm] = Form.useForm()
   const [pinging, setPinging] = useState<string | null>(null)
+  const [version, setVersion] = useState('')
+  const [checking, setChecking] = useState(false)
+
+  useEffect(() => {
+    window.api.app.getVersion().then(setVersion).catch(() => {})
+  }, [])
 
   useEffect(() => {
     if (config) {
@@ -120,11 +126,46 @@ export function SettingsPage(): React.ReactElement {
     }
   }
 
+  const checkUpdate = async (): Promise<void> => {
+    setChecking(true)
+    try {
+      const r = await window.api.update.check()
+      if (r.dev) message.info('Đang chạy bản dev — không kiểm tra cập nhật.')
+      else if (r.error) message.error(`Kiểm tra cập nhật lỗi: ${r.error}`)
+      else if (r.available)
+        // Modal cập nhật toàn cục (UpdateModal) sẽ tự hiện do sự kiện 'available'.
+        message.success(`Có phiên bản mới ${r.version}. Xem hộp thoại cập nhật.`)
+      else message.success(`Bạn đang dùng phiên bản mới nhất (v${r.current}).`)
+    } finally {
+      setChecking(false)
+    }
+  }
+
   return (
     <Space direction="vertical" size={16} style={{ width: '100%', maxWidth: 920 }}>
       <Typography.Title level={4} style={{ margin: 0 }}>
         Cài đặt
       </Typography.Title>
+
+      <Card title="Phiên bản & cập nhật" size="small">
+        <Space align="center" wrap size={16}>
+          <Typography.Text>
+            Phiên bản hiện tại: <b>v{version || '…'}</b>
+          </Typography.Text>
+          <Button
+            type="primary"
+            icon={<CloudSyncOutlined />}
+            loading={checking}
+            onClick={checkUpdate}
+          >
+            Kiểm tra cập nhật
+          </Button>
+        </Space>
+        <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0, fontSize: 13 }}>
+          App tự kiểm tra cập nhật lúc khởi động. Khi có bản mới sẽ hiện hộp thoại để bạn tải về —
+          tải xong chỉ cần bấm cài, ứng dụng <b>tự khởi động lại</b> bản mới (không phải tắt/mở thủ công).
+        </Typography.Paragraph>
+      </Card>
 
       <Card title="GPT Bridge (hub nhúng)" size="small">
         <Form form={bridgeForm} layout="vertical">

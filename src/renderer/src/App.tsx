@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Layout, Menu, Space, Typography, App as AntdApp } from 'antd'
+import { Layout, Menu, Space, Typography } from 'antd'
 import { SettingOutlined, CloudUploadOutlined, HistoryOutlined } from '@ant-design/icons'
 import logo from './assets/logo_white.png'
 import { StoreProvider } from './store'
 import { BridgeStatusBadge } from './components/BridgeStatusBadge'
+import { UpdateModal } from './components/UpdateModal'
 import { SettingsPage } from './pages/SettingsPage'
 import { ImportPage } from './pages/ImportPage'
 import { HistoryPage } from './pages/HistoryPage'
@@ -15,48 +16,11 @@ type PageKey = 'import' | 'history' | 'settings'
 function Shell(): React.ReactElement {
   const [page, setPage] = useState<PageKey>('import')
   const [version, setVersion] = useState('')
-  const { notification } = AntdApp.useApp()
 
   // Lấy version app (package.json) để hiển thị ở góc dưới bên trái.
   useEffect(() => {
     window.api.app.getVersion().then(setVersion).catch(() => {})
   }, [])
-
-  // Thông báo tiến trình tự cập nhật (main → renderer). Tải xong app sẽ tự đóng để cài.
-  useEffect(() => {
-    const off = window.api.on.updateStatus((s) => {
-      switch (s.state) {
-        case 'available':
-          notification.info({
-            key: 'update',
-            message: 'Có bản cập nhật mới',
-            description: `Đang tải phiên bản ${s.version}...`,
-            duration: 0
-          })
-          break
-        case 'downloading':
-          notification.info({
-            key: 'update',
-            message: 'Đang tải bản cập nhật',
-            description: `${s.percent ?? 0}%`,
-            duration: 0
-          })
-          break
-        case 'downloaded':
-          notification.success({
-            key: 'update',
-            message: 'Đã tải xong bản cập nhật',
-            description: 'Ứng dụng sẽ tự đóng để cài đặt. Mở lại để dùng bản mới.',
-            duration: 0
-          })
-          break
-        case 'error':
-          notification.error({ key: 'update', message: 'Cập nhật lỗi', description: s.message, duration: 4 })
-          break
-      }
-    })
-    return off
-  }, [notification])
 
   return (
     <Layout style={{ height: '100vh' }}>
@@ -103,6 +67,7 @@ function Shell(): React.ReactElement {
           {page === 'settings' && <SettingsPage />}
         </Content>
       </Layout>
+      <UpdateModal />
     </Layout>
   )
 }

@@ -48,6 +48,11 @@ const api: Api = {
     runStageB: (runId) => ipcRenderer.invoke(IPC.batchRunStageB, runId),
     cancel: (runId) => ipcRenderer.invoke(IPC.batchCancel, runId)
   },
+  update: {
+    check: () => ipcRenderer.invoke(IPC.updateCheck),
+    download: () => ipcRenderer.invoke(IPC.updateDownload),
+    install: () => ipcRenderer.invoke(IPC.updateInstall)
+  },
   on: {
     batchProgress: (cb) => {
       const h = (_e: unknown, evt: BatchProgressEvent): void => cb(evt)

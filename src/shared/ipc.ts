@@ -47,6 +47,10 @@ export const IPC = {
   batchRunStageA: 'batch:runStageA',
   batchRunStageB: 'batch:runStageB',
   batchCancel: 'batch:cancel',
+  // update (kiểm tra/tải/cài cập nhật qua GitHub Releases)
+  updateCheck: 'update:check',
+  updateDownload: 'update:download',
+  updateInstall: 'update:install',
   // events (main → renderer)
   evtBatchProgress: 'evt:batchProgress',
   evtBridgeStatus: 'evt:bridgeStatus',
@@ -59,6 +63,15 @@ export interface UpdateStatus {
   version?: string
   percent?: number
   message?: string
+}
+
+/** Kết quả kiểm tra cập nhật thủ công (nút trong Settings / auto lúc khởi động). */
+export interface UpdateCheckResult {
+  available: boolean // có bản mới hơn không
+  version?: string // phiên bản mới (nếu có)
+  current: string // phiên bản hiện tại của app
+  dev?: boolean // true khi chạy dev (app chưa đóng gói) → bỏ qua check
+  error?: string // lỗi khi kiểm tra (mạng, GitHub...)
 }
 
 export interface ImportParseResult {
@@ -121,6 +134,11 @@ export interface Api {
     runStageA(runId: string): Promise<void>
     runStageB(runId: string): Promise<void>
     cancel(runId: string): Promise<void>
+  }
+  update: {
+    check(): Promise<UpdateCheckResult>
+    download(): Promise<void>
+    install(): Promise<void>
   }
   on: {
     batchProgress(cb: (e: BatchProgressEvent) => void): () => void
