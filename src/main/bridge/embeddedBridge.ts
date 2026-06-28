@@ -22,7 +22,7 @@ interface InternalJob {
   newChat: boolean
   image: boolean
   extract: ExtractRule | null
-  timeoutMs: number
+  timeoutMs: number // IDLE window: timeout khi KHÔNG nhận thêm delta nào trong khoảng này (mặc định 3 phút)
   status: JobStatus
   answer: string
   rawAnswer: string
@@ -319,6 +319,13 @@ export class EmbeddedBridge extends EventEmitter {
       return
     }
 
+    this.armIdleTimer(job)
+  }
+
+  /** Đặt/gia hạn timer IDLE: chỉ timeout khi KHÔNG nhận thêm delta nào trong `timeoutMs`
+   *  (mặc định 3 phút). Gọi lại mỗi delta để gia hạn → GPT còn đang trả lời thì không bị giết oan;
+   *  chỉ khi im lặng đủ lâu (treo/đứt) mới timeout. */
+  private armIdleTimer(job: InternalJob): void {
     this.clearInFlightTimer()
     this.inFlightTimer = setTimeout(() => {
       if (this.inFlightId === job.id) this.markTimeout(job.id)
@@ -336,6 +343,7 @@ export class EmbeddedBridge extends EventEmitter {
         if (j && j.status === 'running') {
           j.rawAnswer += msg.text || ''
           j.answer += msg.text || ''
+          if (this.inFlightId === j.id) this.armIdleTimer(j) // có hoạt động → gia hạn idle, né timeout oan
         }
         break
       }
