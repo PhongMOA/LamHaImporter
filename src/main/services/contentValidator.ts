@@ -7,9 +7,23 @@ export interface ParsedSpecs {
   warning: string | null
 }
 
+/** Dọn text TRƯỚC khi JSON.parse: gỡ marker citation ChatGPT (chứa [ ] { } phá JSON)
+ *  + bỏ dấu phẩy thừa (trailing comma) GPT hay sót. KHÔNG đụng gạch ngang/khoảng trắng trong value. */
+function cleanJsonForParse(s: string): string {
+  if (!s) return ''
+  return s
+    .replace(/:contentReference\[oaicite:\d+\]\{index=\d+\}/gi, '')
+    .replace(/\[oaicite:\d+\]/gi, '')
+    .replace(/\{index=\d+\}/gi, '')
+    .replace(/[\uE200-\uE2FF]/g, '') // ký tự Private-Use ChatGPT bọc citation
+    .replace(/【[^】]*†[^】]*】/g, '') // citation dạng 【..†..】
+    .replace(/,\s*([\]}])/g, '$1') // dấu phẩy thừa trước ] hoặc }
+}
+
 /** Parse JSON attributes từ answer (đã extract) hoặc rawAnswer fallback. */
 export function parseAttributes(answer: string, rawAnswer: string): ParsedSpecs {
-  const candidates = [answer, extractJsonLoose(rawAnswer)]
+  const r = cleanJsonForParse(rawAnswer)
+  const candidates = [cleanJsonForParse(answer), extractJsonLoose(r)]
   for (const c of candidates) {
     if (!c) continue
     try {
@@ -56,7 +70,9 @@ export interface ParsedSeo {
 
 /** Parse JSON SEO {meta_title, meta_desc, tags[]} từ answer (đã extract) hoặc rawAnswer fallback. */
 export function parseSeo(answer: string, rawAnswer: string): ParsedSeo {
-  const candidates = [answer, extractJsonObjectLoose(answer), extractJsonObjectLoose(rawAnswer)]
+  const a = cleanJsonForParse(answer)
+  const r = cleanJsonForParse(rawAnswer)
+  const candidates = [a, extractJsonObjectLoose(a), extractJsonObjectLoose(r)]
   for (const c of candidates) {
     if (!c) continue
     try {
@@ -115,7 +131,7 @@ export function stripCitations(text: string): string {
     .replace(/[ \t]*\[oaicite:\d+\]/gi, '')
     .replace(/\{index=\d+\}/gi, '')
     .replace(/[ \t]*【[^】]*†[^】]*】/g, '')
-    .replace(/[-]/g, '')
+    .replace(/[\uE200-\uE2FF]/g, '') // ký tự Private-Use ChatGPT bọc citation
     .replace(/[ \t]+([.,;:!?)])/g, '$1') // dọn khoảng trắng lẻ trước dấu câu sau khi gỡ
 }
 

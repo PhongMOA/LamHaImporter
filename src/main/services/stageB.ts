@@ -46,11 +46,22 @@ function escapeAttr(s: string): string {
 
 let activeStageB: { runId: string; ctrl: RunController } | null = null
 
-/** Hủy Pha B. Nếu truyền runId, chỉ hủy khi đúng run đang chạy. */
+/** Lỗi nội bộ báo "user đã bấm Dừng" — KHÔNG đánh job 'error', chỉ thoát vòng lặp êm. */
+class CancelledError extends Error {
+  constructor() {
+    super('Đã dừng theo yêu cầu')
+    this.name = 'CancelledError'
+  }
+}
+
+/** Hủy Pha B. Nếu truyền runId, chỉ hủy khi đúng run đang chạy.
+ *  Ngoài bật cờ (vòng lặp thoát giữa 2 SP), còn ABORT job GPT đang bay để task hiện tại dừng NGAY,
+ *  không phải chờ hết timeout idle 3 phút. */
 export function cancelStageB(runId?: string): void {
   if (!activeStageB) return
   if (runId && activeStageB.runId !== runId) return
   activeStageB.ctrl.cancelled = true
+  embeddedBridge.abort('Đã dừng theo yêu cầu')
 }
 
 /** 1 ảnh sơ đồ ứng với 1 placeholder trong detail thô. url=null → chưa tạo được. */
@@ -101,10 +112,15 @@ function isSeoComplete(seoJson: string | null): boolean {
 async function generateContent(
   job: JobRow,
   client: SiteClient,
-  emit: (p: StageProgress) => void
+  emit: (p: StageProgress) => void,
+  isCancelled: () => boolean
 ): Promise<boolean> {
   const draft = queueStore.getDraft(job)
   const base: StageProgress = { jobId: job.id, rowIndex: job.row_index, title: job.title, status: '' }
+  // Chốt hủy: gọi trước mỗi task để thoát ngay khi user bấm Dừng (không khởi động task GPT kế).
+  const ckCancel = (): void => {
+    if (isCancelled()) throw new CancelledError()
+  }
 
   // Thông tin site để CTA "nơi mua hàng" trỏ đúng về web mình (tên + URL).
   const cfg = configStore.get()
@@ -129,6 +145,7 @@ async function generateContent(
   const failures: string[] = []
 
   // ===== Task 1: detail (HTML thô) =====
+  ckCancel()
   if (!rawDetail || !validateDetail(rawDetail).ok) {
     emit({ ...base, status: 'generating', message: 'Đang sinh mô tả (AI)...' })
     const detailRes = await embeddedBridge.ask(buildDetailPrompt(draft, sitePromptInfo, imageRequests), {
@@ -156,6 +173,7 @@ async function generateContent(
   const detailOk = !!rawDetail && validateDetail(rawDetail).ok
 
   // ===== Task 2: attributes (JSON) — prompt tự chứa ngữ cảnh, chạy lại lẻ được =====
+  ckCancel()
   if (attributes.length === 0) {
     emit({ ...base, status: 'generating', message: 'Đang sinh thông số (AI)...' })
     try {
@@ -182,6 +200,7 @@ async function generateContent(
     // đồng bộ slot theo placeholder hiện tại, GIỮ url đã có (theo index) để không vẽ lại ảnh đã xong
     images = descs.map((desc, i) => ({ desc, url: images[i]?.url ?? null }))
     for (let i = 0; i < descs.length; i++) {
+      ckCancel()
       if (images[i].url) continue // đã có ảnh → bỏ qua
       if (!job.product_id) {
         failures.push('Thiếu product_id để upload ảnh')
@@ -223,6 +242,7 @@ async function generateContent(
   }
 
   // ===== Task 4: SEO (title + desc + tags) — prompt tự chứa ngữ cảnh =====
+  ckCancel()
   if (!isSeoComplete(seoJson)) {
     emit({ ...base, status: 'generating', message: 'Đang sinh SEO (AI)...' })
     try {
@@ -327,12 +347,18 @@ export async function runStageB(runId: string, siteId: string, emit: (p: StagePr
     let job = queueStore.nextStageB(runId)
     while (job && !ctrl.cancelled) {
       try {
-        const ok = await generateContent(job, client, emit) // đủ 4 task → true; thiếu → tự đánh error → false
+        const ok = await generateContent(job, client, emit, () => ctrl.cancelled) // đủ 4 task → true
         if (ok) {
           const fresh = queueStore.getJob(job.id)
           if (fresh) await upsertContent(fresh, client, emit)
         }
       } catch (e) {
+        // User bấm Dừng (CancelledError, hoặc lỗi cứng xảy ra ngay sau khi abort) → KHÔNG đánh 'error':
+        // giữ checkpoint, để stage_b='generating' (nextStageB sẽ nhặt lại khi user "Chạy Pha B" tiếp).
+        if (e instanceof CancelledError || ctrl.cancelled) {
+          emit({ jobId: job.id, rowIndex: job.row_index, title: job.title, status: 'content', message: '⏸ Đã dừng' })
+          break
+        }
         // lỗi cứng (extension rớt, mạng, upsert lỗi...) → đánh 'error', KHÔNG tự chạy lại.
         const msg = (e as Error).message
         queueStore.markStageB(job.id, { stage_b: 'error', last_error: msg })
