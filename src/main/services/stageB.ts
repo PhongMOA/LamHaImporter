@@ -55,13 +55,13 @@ class CancelledError extends Error {
 }
 
 /** Hủy Pha B. Nếu truyền runId, chỉ hủy khi đúng run đang chạy.
- *  Ngoài bật cờ (vòng lặp thoát giữa 2 SP), còn ABORT job GPT đang bay để task hiện tại dừng NGAY,
- *  không phải chờ hết timeout idle 3 phút. */
+ *  CHỜ TASK HIỆN TẠI CHẠY XONG rồi mới dừng: chỉ bật cờ, không cắt ngang job GPT đang bay.
+ *  generateContent kiểm tra cờ TRƯỚC mỗi task → task đang chạy hoàn thành + checkpoint, rồi dừng
+ *  trước task kế (không phí công, không để trạng thái dở). */
 export function cancelStageB(runId?: string): void {
   if (!activeStageB) return
   if (runId && activeStageB.runId !== runId) return
   activeStageB.ctrl.cancelled = true
-  embeddedBridge.abort('Đã dừng theo yêu cầu')
 }
 
 /** 1 ảnh sơ đồ ứng với 1 placeholder trong detail thô. url=null → chưa tạo được. */
@@ -172,6 +172,16 @@ async function generateContent(
   }
   const detailOk = !!rawDetail && validateDetail(rawDetail).ok
 
+  // Mô tả là GỐC của cả lượt (4 task chung 1 conversation, tạo bởi newChat của detail).
+  // Detail lỗi (rỗng/no-html — thường do extension chốt turn sớm khi GPT đang research) → DỪNG cả SP NGAY,
+  // KHÔNG gửi tiếp thông số/ảnh/SEO (tránh chen ngang khi GPT còn đang trả lời mô tả). User "Chạy lại" sau.
+  if (!detailOk) {
+    const msg = failures.length ? failures.join('; ') : 'Mô tả rỗng/quá ngắn'
+    queueStore.markStageB(job.id, { stage_b: 'error', last_error: msg })
+    emit({ ...base, status: 'error', message: msg })
+    return false
+  }
+
   // ===== Task 2: attributes (JSON) — prompt tự chứa ngữ cảnh, chạy lại lẻ được =====
   ckCancel()
   if (attributes.length === 0) {
@@ -211,7 +221,9 @@ async function generateContent(
         const imgRes = await embeddedBridge.ask(buildDetailImagePrompt(draft, descs[i]), {
           conversationId: conversationId || undefined,
           image: true,
-          timeoutMs: 220_000
+          // Trần idle 5.5 phút: extension chờ ảnh render tối đa 300s + gửi heartbeat (delta rỗng)
+          // mỗi 5s để gia hạn idle-timer này. Cushion dư phòng heartbeat trễ/extension chốt sát trần.
+          timeoutMs: 330_000
         })
         const dataUrl = (imgRes.images || []).find((u) => !!u)
         if (!dataUrl) throw new Error('AI không trả ảnh')

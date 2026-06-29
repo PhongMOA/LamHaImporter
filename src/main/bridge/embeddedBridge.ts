@@ -196,19 +196,6 @@ export class EmbeddedBridge extends EventEmitter {
     })
   }
 
-  /** Hủy NGAY job đang chạy + mọi job đang chờ (khi user bấm Dừng). Các `ask()` tương ứng reject ngay,
-   *  không phải chờ hết timeout idle. Trả lại quyền điều khiển cho Pha B để thoát vòng lặp sớm. */
-  abort(reason = 'Đã dừng theo yêu cầu'): void {
-    // 1) Dọn hàng đợi trước để pump() không nhặt thêm job mới.
-    const queued = this.waiting.splice(0)
-    for (const id of queued) {
-      const j = this.jobs.get(id)
-      if (j && j.status === 'queued') this.markError(id, reason)
-    }
-    // 2) Cắt job đang bay (nếu có) → ask() reject ngay với lý do này.
-    if (this.inFlightId) this.markError(this.inFlightId, reason)
-  }
-
   // --------------------------------------------------------------- WS hub
 
   private isExtensionConnected(): boolean {

@@ -176,7 +176,7 @@ export function ImportPage(): React.ReactElement {
 
   const cancel = async (): Promise<void> => {
     if (activeRunId) await window.api.batch.cancel(activeRunId)
-    message.info('Đang dừng — task AI hiện tại bị cắt ngay; phần đã làm vẫn được giữ để chạy tiếp.')
+    message.info('Sẽ dừng sau khi task AI hiện tại chạy xong; phần đã làm được giữ để chạy tiếp.')
   }
 
   // Reset các job đang lỗi về 'pending' để Pha A/B nhặt chạy lại (giữ checkpoint đã có).
