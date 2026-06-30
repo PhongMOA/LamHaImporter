@@ -197,14 +197,46 @@ async function generateContent(
         queueStore.markStageB(job.id, { attributes_json: JSON.stringify(attributes) })
         emit({ ...base, status: 'content', message: `✓ Xong thông số (${attributes.length} dòng)` })
       } else {
-        failures.push(parsed.warning || 'Thông số rỗng/không parse được')
+        const m = parsed.warning || 'Thông số rỗng/không parse được'
+        failures.push(m)
+        emit({ ...base, status: 'warn', message: `✗ Thông số lỗi: ${m}` })
       }
     } catch (e) {
-      failures.push(`Thông số lỗi: ${(e as Error).message}`)
+      const m = (e as Error).message
+      failures.push(`Thông số lỗi: ${m}`)
+      emit({ ...base, status: 'warn', message: `✗ Thông số lỗi: ${m}` })
     }
   }
 
-  // ===== Task 3: ảnh sơ đồ — chỉ chạy khi đã có detail; mỗi placeholder = 1 ảnh =====
+  // ===== Task 3: SEO (title + desc + tags) — prompt tự chứa ngữ cảnh =====
+  ckCancel()
+  if (!isSeoComplete(seoJson)) {
+    emit({ ...base, status: 'generating', message: 'Đang sinh SEO (AI)...' })
+    try {
+      const seoRes = await embeddedBridge.ask(buildSeoPrompt(draft), {
+        conversationId: conversationId || undefined,
+        extract: { type: 'code', lang: 'json' }
+      })
+      const seo = parseSeo(seoRes.answer, seoRes.rawAnswer)
+      if (seo.meta_title && seo.meta_desc && seo.tags.length > 0) {
+        seoJson = JSON.stringify({ meta_title: seo.meta_title, meta_desc: seo.meta_desc, tags: seo.tags })
+        queueStore.markStageB(job.id, { seo_json: seoJson })
+        emit({ ...base, status: 'content', message: `✓ Xong SEO (${seo.tags.length} tags)` })
+      } else {
+        const m = 'SEO thiếu dữ liệu (cần đủ tiêu đề, mô tả và tags)'
+        failures.push(m)
+        emit({ ...base, status: 'warn', message: `✗ ${m}` })
+      }
+    } catch (e) {
+      const m = (e as Error).message
+      failures.push(`SEO lỗi: ${m}`)
+      emit({ ...base, status: 'warn', message: `✗ SEO lỗi: ${m}` })
+    }
+  }
+
+  // ===== Task 4: ảnh sơ đồ — CHẠY CUỐI; chỉ chạy khi đã có detail; mỗi placeholder = 1 ảnh =====
+  // Để cuối vì ảnh là task chậm/dễ timeout nhất: các task text (mô tả/thông số/SEO) đã chốt xong
+  // trước → dù ảnh lỗi vẫn giữ được nội dung text đã checkpoint.
   if (detailOk) {
     const descs = extractImagePlaceholders(rawDetail)
     // đồng bộ slot theo placeholder hiện tại, GIỮ url đã có (theo index) để không vẽ lại ảnh đã xong
@@ -213,7 +245,8 @@ async function generateContent(
       ckCancel()
       if (images[i].url) continue // đã có ảnh → bỏ qua
       if (!job.product_id) {
-        failures.push('Thiếu product_id để upload ảnh')
+        // Ảnh là BEST-EFFORT → KHÔNG đẩy vào failures (không chặn đăng), chỉ log.
+        emit({ ...base, status: 'warn', message: '✗ Thiếu product_id để upload ảnh — bỏ qua ảnh' })
         break
       }
       emit({ ...base, status: 'generating', message: `Đang tạo ảnh ${i + 1}/${descs.length} (AI)...` })
@@ -248,44 +281,29 @@ async function generateContent(
         queueStore.markStageB(job.id, { images_json: JSON.stringify(images) }) // checkpoint từng ảnh
         emit({ ...base, status: 'content', message: `✓ Xong ảnh ${i + 1}/${descs.length}` })
       } catch (e) {
-        failures.push(`Ảnh ${i + 1} lỗi: ${(e as Error).message}`)
+        // Ảnh là BEST-EFFORT → KHÔNG đẩy vào failures (không chặn đăng); placeholder ảnh này
+        // sẽ được upsertContent gỡ bỏ, SP vẫn đăng bình thường. Chỉ log để theo dõi.
+        const m = (e as Error).message
+        emit({ ...base, status: 'warn', message: `✗ Ảnh ${i + 1}/${descs.length} lỗi: ${m} — bỏ ảnh này, vẫn đăng` })
       }
     }
   }
 
-  // ===== Task 4: SEO (title + desc + tags) — prompt tự chứa ngữ cảnh =====
-  ckCancel()
-  if (!isSeoComplete(seoJson)) {
-    emit({ ...base, status: 'generating', message: 'Đang sinh SEO (AI)...' })
-    try {
-      const seoRes = await embeddedBridge.ask(buildSeoPrompt(draft), {
-        conversationId: conversationId || undefined,
-        extract: { type: 'code', lang: 'json' }
-      })
-      const seo = parseSeo(seoRes.answer, seoRes.rawAnswer)
-      if (seo.meta_title && seo.meta_desc && seo.tags.length > 0) {
-        seoJson = JSON.stringify({ meta_title: seo.meta_title, meta_desc: seo.meta_desc, tags: seo.tags })
-        queueStore.markStageB(job.id, { seo_json: seoJson })
-        emit({ ...base, status: 'content', message: `✓ Xong SEO (${seo.tags.length} tags)` })
-      } else {
-        failures.push('SEO thiếu dữ liệu (cần đủ tiêu đề, mô tả và tags)')
-      }
-    } catch (e) {
-      failures.push(`SEO lỗi: ${(e as Error).message}`)
-    }
-  }
+  // ===== Chốt: chỉ TEXT (mô tả + thông số + SEO) mới ràng buộc; ẢNH là best-effort =====
+  // Ảnh nào tạo được thì chèn, ảnh nào fail thì upsertContent gỡ placeholder & đăng bình thường.
+  const totalImgs = detailOk ? extractImagePlaceholders(rawDetail).length : 0
+  const okImgs = images.filter((s) => !!s?.url).length
+  const contentOk = detailOk && attributes.length > 0 && isSeoComplete(seoJson)
 
-  // ===== Chốt: đủ cả 4 task chưa? =====
-  const imagesOk = detailOk && extractImagePlaceholders(rawDetail).every((_, i) => !!images[i]?.url)
-  const allOk = detailOk && attributes.length > 0 && imagesOk && isSeoComplete(seoJson)
-
-  if (allOk) {
+  if (contentOk) {
     queueStore.markStageB(job.id, { stage_b: 'content', last_error: null })
-    emit({ ...base, status: 'content', message: `✓ Đủ 4 task (${attributes.length} thông số) — chờ đăng` })
+    const imgNote = totalImgs ? `, ${okImgs}/${totalImgs} ảnh` : ''
+    emit({ ...base, status: 'content', message: `✓ Đủ nội dung (${attributes.length} thông số${imgNote}) — chờ đăng` })
     return true
   }
-  // Chưa đủ → đánh 'error' NGAY, KHÔNG upsert, KHÔNG tự chạy lại. Vẫn giữ phần đã checkpoint;
+  // Thiếu task TEXT → đánh 'error' NGAY, KHÔNG upsert, KHÔNG tự chạy lại. Vẫn giữ phần đã checkpoint;
   // user bấm "chạy lại" → retryErrors đưa về pending, lần sau chỉ làm nốt task còn thiếu.
+  // (failures chỉ còn lỗi text vì lỗi ảnh không được đẩy vào — ảnh không chặn đăng.)
   const msg = failures.length ? failures.join('; ') : 'Thiếu dữ liệu nội dung'
   queueStore.markStageB(job.id, { stage_b: 'error', last_error: msg })
   emit({ ...base, status: 'error', message: msg })

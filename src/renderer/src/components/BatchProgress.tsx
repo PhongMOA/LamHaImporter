@@ -44,6 +44,7 @@ const STATUS_COLOR: Record<string, string> = {
   content: 'cyan',
   enriched: 'geekblue',
   done: 'success',
+  warn: 'warning',
   error: 'error'
 }
 
