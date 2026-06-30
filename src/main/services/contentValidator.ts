@@ -152,13 +152,26 @@ export function replaceImagePlaceholder(html: string, replacement: string): stri
   return html.replace(IMG_PLACEHOLDER, replacement)
 }
 
+/** Gỡ vỏ markdown lẫn trong HTML khi GPT bọc bài bằng code fence (```html ... ```) hoặc
+ *  in nhãn ngôn ngữ "HTML" trơ ở đầu — nếu không gỡ, chữ "HTML"/dấu ``` lọt vào bài đăng.
+ *  - Xoá MỌI dòng chỉ chứa fence markdown (```lang / ``` / ~~~ ...), kể cả fence mở lẫn đóng.
+ *  - Xoá nhãn ngôn ngữ trơ "HTML"/"html" nếu đứng RIÊNG 1 dòng ở ĐẦU (trước thẻ HTML đầu tiên). */
+export function unwrapCodeFence(html: string): string {
+  if (typeof html !== 'string' || !html) return html || ''
+  return html
+    .replace(/^[ \t]{0,3}(?:`{3,}|~{3,})[^\n]*\n?/gim, '') // dòng fence markdown bất kỳ
+    .replace(/^\s*html\s*(\r?\n|$)/i, '') // nhãn "HTML" trơ đầu bài (detail luôn mở đầu bằng thẻ)
+    .trimStart()
+}
+
 /** Làm sạch detail HTML trước khi đăng:
+ *  - Gỡ vỏ markdown (code fence ```html```, nhãn "HTML" trơ) GPT hay bọc quanh bài.
  *  - Gỡ marker trích dẫn ChatGPT (:contentReference[oaicite...], 【…†…】, ký tự PUA).
  *  - Bỏ <img> có src TUYỆT ĐỐI (http/https/data/protocol-relative) — AI hay bịa URL ngoài → ảnh vỡ.
  *  - GIỮ <img> src NỘI BỘ (bắt đầu '/...') vì đó là ảnh sơ đồ ta tự tải về & upload lên server.
  *  - Bỏ vỏ <figure>/<picture> rỗng và các <p></p> rỗng (ví dụ sau khi gỡ placeholder). */
 export function sanitizeDetail(html: string): string {
-  return stripCitations(html)
+  return stripCitations(unwrapCodeFence(html))
     .replace(/<img\b[^>]*>/gi, (tag) => {
       const m = tag.match(/\bsrc\s*=\s*["']([^"']*)["']/i)
       const src = (m ? m[1] : '').trim()

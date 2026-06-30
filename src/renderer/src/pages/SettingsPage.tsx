@@ -47,7 +47,8 @@ export function SettingsPage(): React.ReactElement {
       imgReqForm.setFieldsValue({
         enabled: config.detailImageEnabled !== false,
         req1: config.detailImageRequests?.[0] ?? '',
-        req2: config.detailImageRequests?.[1] ?? ''
+        req2: config.detailImageRequests?.[1] ?? '',
+        timeoutSec: config.detailImageTimeoutSec ?? 300
       })
     }
   }, [config, bridgeForm, imageForm, imgReqForm])
@@ -70,7 +71,8 @@ export function SettingsPage(): React.ReactElement {
     const v = await imgReqForm.validateFields()
     // Bỏ phần tử rỗng để Pha B chỉ tạo đúng số ảnh được yêu cầu.
     const detailImageRequests = [v.req1, v.req2].map((s: string) => (s || '').trim()).filter(Boolean)
-    await saveConfig({ detailImageEnabled: !!v.enabled, detailImageRequests })
+    const detailImageTimeoutSec = Math.max(60, Math.round(Number(v.timeoutSec) || 300))
+    await saveConfig({ detailImageEnabled: !!v.enabled, detailImageRequests, detailImageTimeoutSec })
     message.success('Đã lưu cấu hình tạo ảnh nội dung.')
   }
 
@@ -266,6 +268,20 @@ export function SettingsPage(): React.ReactElement {
                       rows={3}
                       disabled={!on}
                       placeholder="VD: Sơ đồ nguyên lý hoạt động của sản phẩm: thể hiện các khối chức năng chính và luồng hoạt động."
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    name="timeoutSec"
+                    label="Thời gian chờ mỗi ảnh trước khi báo lỗi (giây)"
+                    tooltip="Trần chờ AI render xong 1 ảnh. Quá thời gian này mà chưa có ảnh → bỏ ảnh đó, vẫn đăng bài. Tối thiểu 60s, khuyến nghị 240–360s vì ảnh DALL-E render khá lâu. (Yêu cầu cập nhật extension Add-On GPT mới nhất để có hiệu lực.)"
+                  >
+                    <InputNumber
+                      min={60}
+                      max={900}
+                      step={30}
+                      disabled={!on}
+                      style={{ width: 160 }}
+                      addonAfter="giây"
                     />
                   </Form.Item>
                 </>

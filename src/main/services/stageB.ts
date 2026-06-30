@@ -254,9 +254,9 @@ async function generateContent(
         const imgRes = await embeddedBridge.ask(buildDetailImagePrompt(draft, descs[i]), {
           conversationId: conversationId || undefined,
           image: true,
-          // Trần idle 5.5 phút: extension chờ ảnh render tối đa 300s + gửi heartbeat (delta rỗng)
-          // mỗi 5s để gia hạn idle-timer này. Cushion dư phòng heartbeat trễ/extension chốt sát trần.
-          timeoutMs: 330_000
+          // Trần chờ ảnh = cấu hình (Settings → tạo ảnh), tối thiểu 60s. Giá trị này được truyền
+          // xuống extension làm trần render DALL-E; extension gửi heartbeat 5s giữ idle-timer này sống.
+          timeoutMs: Math.max(60, cfg.detailImageTimeoutSec || 300) * 1000
         })
         const dataUrl = (imgRes.images || []).find((u) => !!u)
         if (!dataUrl) throw new Error('AI không trả ảnh')
