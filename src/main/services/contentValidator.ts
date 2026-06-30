@@ -184,6 +184,15 @@ export function sanitizeDetail(html: string): string {
     .trim()
 }
 
+/** Bọc toàn bộ detail trong 1 div canh đều (justify) — text-align kế thừa xuống mọi <p>/<li>.
+ *  Idempotent: nếu đã bọc sẵn (lần đăng trước) thì không bọc chồng. */
+export function wrapJustify(html: string): string {
+  const s = (html || '').trim()
+  if (!s) return s
+  if (/^<div[^>]*text-align\s*:\s*justify/i.test(s)) return s // đã bọc rồi
+  return `<div style="text-align: justify;">${s}</div>`
+}
+
 /** Kiểm tra detail HTML có nội dung tối thiểu. */
 export function validateDetail(html: string): { ok: boolean; warning: string | null } {
   const text = html.replace(/<[^>]+>/g, '').trim()
