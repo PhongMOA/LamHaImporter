@@ -343,6 +343,7 @@ export class EmbeddedBridge extends EventEmitter {
         if (j && j.status === 'running') {
           j.rawAnswer += msg.text || ''
           j.answer += msg.text || ''
+          if (msg.conversationId) j.conversationId = msg.conversationId // bắt sớm để job cứu (idle-timeout) vẫn chain được
           if (this.inFlightId === j.id) this.armIdleTimer(j) // có hoạt động → gia hạn idle, né timeout oan
         }
         break
@@ -388,6 +389,19 @@ export class EmbeddedBridge extends EventEmitter {
   private markTimeout(id: string): void {
     const job = this.jobs.get(id)
     if (!job) return
+    // Cứu nội dung khi idle-timeout: GPT có thể đã trả lời XONG nhưng extension không gửi 'done'
+    // (đổi UI ChatGPT / chế độ "suy nghĩ") → im lặng đủ lâu thành timeout OAN, vứt mất bài đã nhận.
+    // Chỉ cứu job trích khối mã: nếu buffer đã chứa ĐỦ khối mã ĐÓNG (applyExtract ra nội dung,
+    // không warning) thì coi như done. Bài dở (fence chưa đóng) vẫn timeout → retry như cũ.
+    if (job.extract) {
+      const { answer, warning } = applyExtract(job.rawAnswer, job.extract)
+      if (answer && !warning) {
+        job.answer = answer
+        job.extractWarning = 'idle-timeout nhưng đã nhận đủ khối mã — dùng nội dung đã nhận'
+        this.settle(job, 'done')
+        return
+      }
+    }
     job.error = 'timeout'
     this.settle(job, 'timeout')
   }

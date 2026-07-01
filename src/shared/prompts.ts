@@ -165,6 +165,7 @@ export function buildSpecPrompt(draft: ProductDraft): string {
     '- title và value đều là string tiếng Việt; KHÔNG kèm lời dẫn, KHÔNG chú thích ngoài khối mã.',
     '- KHÔNG đưa các dòng: tên sản phẩm, model, mã hàng, xuất xứ, thương hiệu/hãng vào bảng (đã hiển thị ở nơi khác, tránh trùng lặp).',
     '- Chỉ liệt kê thông số kỹ thuật thực sự (điện áp, dòng định mức, công suất, số cực, tần số, tiếp điểm, tiêu chuẩn, kích thước...).',
+    '- BẮT BUỘC có 2 dòng "Trọng lượng" và "Kích thước" (kích thước dạng Dài×Rộng×Cao kèm đơn vị mm). Nếu không chắc giá trị thực, dùng "Liên hệ".',
     '- Nếu không chắc một giá trị, dùng "Liên hệ" thay vì bịa số liệu sai.'
   ].join('\n')
 }
