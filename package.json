@@ -1,6 +1,6 @@
 {
   "name": "lamha-importer",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "App đăng sản phẩm hàng loạt từ Excel + nội dung AI (ChatGPT bridge) cho lamha/thietbicodien",
   "main": "./out/main/index.js",
   "author": "PhongMOA",

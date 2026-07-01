@@ -22,6 +22,7 @@ import {
   validateDetail,
   sanitizeDetail,
   wrapJustify,
+  styleTables,
   extractImagePlaceholders,
   replaceImagePlaceholder
 } from './contentValidator'
@@ -324,6 +325,7 @@ async function upsertContent(job: JobRow, client: SiteClient, emit: (p: StagePro
   }
   detail = sanitizeDetail(detail) // dọn <img> bịa + gỡ placeholder sót (nếu có) qua bước kế
   detail = detail.replace(/<p>\s*\[\[IMAGE:[\s\S]*?\]\]\s*<\/p>/gi, '').replace(/\[\[IMAGE:[\s\S]*?\]\]/gi, '')
+  detail = styleTables(detail) // ép border cho bảng thông số (GPT xuất bảng không kèm style)
   detail = wrapJustify(detail) // canh đều (justify) toàn bộ mô tả
   const attributes: Attribute[] = safeParseAttributes(job.attributes_json)
 

@@ -159,9 +159,12 @@ export function replaceImagePlaceholder(html: string, replacement: string): stri
 export function unwrapCodeFence(html: string): string {
   if (typeof html !== 'string' || !html) return html || ''
   return html
-    .replace(/^[ \t]{0,3}(?:`{3,}|~{3,})[^\n]*\n?/gim, '') // dòng fence markdown bất kỳ
+    .replace(/^[ \t]{0,3}(?:`{3,}|~{3,})[^\n]*\n?/gim, '') // dòng fence markdown bất kỳ (đầu dòng)
+    .replace(/<(p|div|span|pre|code)[^>]*>\s*(?:`{2,}|~{2,})[a-z0-9]*\s*<\/\1>/gi, '') // fence bị bọc trong thẻ: <p>```</p>
+    .replace(/(?:`{2,}|~{2,})[a-z0-9]*\s*$/i, '') // fence còn sót ở CUỐI bài (không đầu dòng / lẻ dấu)
+    .replace(/^\s*(?:`{2,}|~{2,})[a-z0-9]*\s*/i, '') // fence còn sót ở ĐẦU bài (không đầu dòng / lẻ dấu)
     .replace(/^\s*html\s*(\r?\n|$)/i, '') // nhãn "HTML" trơ đầu bài (detail luôn mở đầu bằng thẻ)
-    .trimStart()
+    .trim()
 }
 
 /** Làm sạch detail HTML trước khi đăng:
@@ -182,6 +185,31 @@ export function sanitizeDetail(html: string): string {
     .replace(/<p>\s*<\/p>/gi, '') // đoạn rỗng sau khi gỡ placeholder/img
     .replace(/[ \t]+\n/g, '\n')
     .trim()
+}
+
+/** Ép mọi <table> trong detail luôn có border (kẻ ô như mẫu) — GPT hay xuất bảng thông số
+ *  KHÔNG kèm style, website không kẻ ô mặc định. Ta chèn border inline lúc đăng để độc lập CSS site.
+ *  - Giữ nguyên style GPT đã set (chỉ append border phía sau → khai báo của ta thắng cho cùng thuộc tính).
+ *  - Không có <table> thì trả nguyên văn (không đụng bài). */
+export function styleTables(html: string): string {
+  if (typeof html !== 'string' || !html) return html || ''
+  if (!/<table/i.test(html)) return html
+  const TABLE = 'border-collapse: collapse; width: 100%; margin: 12px 0; border: 1px solid #ddd;'
+  const CELL = 'border: 1px solid #ddd; padding: 8px 12px; vertical-align: top;'
+  const HEAD = 'border: 1px solid #ddd; padding: 8px 12px; vertical-align: top; text-align: left; background: #f5f5f5; font-weight: 600;'
+  const mergeStyle = (tag: string, style: string): string => {
+    if (/\bstyle\s*=/i.test(tag)) {
+      return tag.replace(/style\s*=\s*(["'])([\s\S]*?)\1/i, (_m, q, cur) => {
+        const c = String(cur).trim()
+        const sep = c ? (c.endsWith(';') ? ' ' : '; ') : ''
+        return `style=${q}${c}${sep}${style}${q}`
+      })
+    }
+    return tag.replace(/^<(\w+)/, `<$1 style="${style}"`)
+  }
+  return html
+    .replace(/<table\b[^>]*>/gi, (t) => mergeStyle(t, TABLE))
+    .replace(/<t([dh])\b[^>]*>/gi, (t, k) => mergeStyle(t, k.toLowerCase() === 'h' ? HEAD : CELL))
 }
 
 /** Bọc toàn bộ detail trong 1 div canh đều (justify) — text-align kế thừa xuống mọi <p>/<li>.
