@@ -135,7 +135,7 @@ export function buildSeoPrompt(draft: ProductDraft): string {
     'Hãy tạo dữ liệu SEO cho ĐÚNG sản phẩm trên, gồm 3 phần:',
     '- meta_title: Tiêu đề SEO hấp dẫn, chứa tên sản phẩm/model và từ khoá chính, dài khoảng 50–60 ký tự.',
     '- meta_desc: Mô tả SEO (meta description) súc tích, kêu gọi nhấp chuột, chứa từ khoá chính, dài khoảng 140–160 ký tự.',
-    '- tags: 5–8 TỪ KHOÁ SEO mà người dùng thực sự gõ khi tìm mua sản phẩm này trên Google',
+    '- tags: 2–3 TỪ KHOÁ SEO mà người dùng thực sự gõ khi tìm mua sản phẩm này trên Google',
     '  (cụm từ tìm kiếm: "mua <model>", "<model> giá bao nhiêu", "<tên sp> chính hãng", "báo giá <hãng> <dòng sp>",',
     '  từ khoá theo công năng/ứng dụng/thông số nổi bật...). KHÔNG dùng nhãn phân loại chung chung',
     '  (ví dụ KHÔNG dùng: "thiết bị điện", "sản phẩm", "công nghiệp"). Mỗi tag là một cụm tìm kiếm tự nhiên, KHÔNG trùng lặp.',
