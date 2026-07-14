@@ -177,6 +177,35 @@ export class SiteClient {
 
   // ------------------------------------------------------------------ product
 
+  /** Cache slug→productId để tránh fetch lại trong 1 batch (null = đã tra & không thấy). */
+  private productIdCache = new Map<string, string | null>()
+
+  /**
+   * Resolve slug sản phẩm → _id bằng cách đọc trang public /san-pham/:slug/.
+   * lamha KHÔNG có API query product theo slug, nhưng trang chi tiết nhúng _id ở nút
+   * "THÊM VÀO GIỎ HÀNG": href="/gio-hang/?add=<_id>" (modules/page/views/product.pug).
+   * Trả null nếu slug không tồn tại (404) hoặc không tìm thấy id trong HTML.
+   * Lưu ý: SP "ngưng sản xuất" ẩn nút này (hiện SP thay thế) → có thể trả null/nhầm; chấp nhận
+   * được vì "sản phẩm mua cùng" chỉ nên trỏ tới SP đang bán.
+   */
+  async resolveProductIdBySlug(slug: string): Promise<string | null> {
+    const key = String(slug || '').trim().toLowerCase()
+    if (!key) return null
+    if (this.productIdCache.has(key)) return this.productIdCache.get(key) ?? null
+    let id: string | null = null
+    try {
+      const res = await this.http.get(`/san-pham/${encodeURIComponent(key)}/`)
+      if (res.status >= 200 && res.status < 300 && typeof res.data === 'string') {
+        const m = res.data.match(/\/gio-hang\/\?add=([a-f0-9]{24})/i)
+        if (m) id = m[1]
+      }
+    } catch {
+      id = null
+    }
+    this.productIdCache.set(key, id)
+    return id
+  }
+
   /** POST /api/products { form } → trả _id sản phẩm tạo. */
   async createProduct(form: Record<string, unknown>): Promise<{ _id: string }> {
     await this.ensureCsrf()

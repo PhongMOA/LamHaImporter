@@ -11,6 +11,7 @@
 // ============================================================================
 
 import type { JobRow, ProductDraft } from '@shared/types'
+import { slugFromUrl } from '@shared/mapping'
 import { queueStore } from './queueStore'
 import { SiteClient } from './siteClient'
 import { TaxonomyResolver } from './taxonomyResolver'
@@ -75,6 +76,23 @@ async function processJob(
     const putBody: Record<string, unknown> = { ...tax.formPatch }
     // create (POST) luôn ghi đè meta_slug theo title; đặt lại slug mong muốn (từ cột Link) qua PUT.
     if (draft.metaSlug) putBody.meta_slug = draft.metaSlug
+    // "Sản phẩm mua cùng": resolve link/slug → _id trên site đích rồi set also_buy.
+    //   - Ô trống ⇒ KHÔNG set ⇒ website tự lấy danh sách theo series (fallback ở page/controllers/product.js).
+    //   - Có điền ⇒ dùng đúng danh sách SP người dùng nhập (bỏ qua slug không tồn tại + có cảnh báo).
+    if (draft.alsoBuyLinks && draft.alsoBuyLinks.length) {
+      const ids: string[] = []
+      for (const link of draft.alsoBuyLinks) {
+        const slug = slugFromUrl(link)
+        if (!slug) continue
+        const id = await client.resolveProductIdBySlug(slug)
+        if (id) {
+          if (!ids.includes(id)) ids.push(id)
+        } else {
+          emit({ ...base, status: 'created', message: `SP mua cùng không tìm thấy trên site: ${slug}` })
+        }
+      }
+      if (ids.length) putBody.also_buy = ids
+    }
     const extra: Record<string, unknown> = {}
     if (tax.new_brand) extra.new_brand = tax.new_brand
     if (tax.new_series) extra.new_series = tax.new_series

@@ -238,7 +238,7 @@ async function generateContent(
 
   // ===== Task 4: ảnh sơ đồ — CHẠY CUỐI; chỉ chạy khi đã có detail; mỗi placeholder = 1 ảnh =====
   // Để cuối vì ảnh là task chậm/dễ timeout nhất: các task text (mô tả/thông số/SEO) đã chốt xong
-  // trước → dù ảnh lỗi vẫn giữ được nội dung text đã checkpoint.
+  // trước → ảnh lỗi thì job 'error' nhưng text vẫn được giữ, "chạy lại" chỉ làm nốt ảnh.
   if (detailOk) {
     const descs = extractImagePlaceholders(rawDetail)
     // đồng bộ slot theo placeholder hiện tại, GIỮ url đã có (theo index) để không vẽ lại ảnh đã xong
@@ -247,8 +247,9 @@ async function generateContent(
       ckCancel()
       if (images[i].url) continue // đã có ảnh → bỏ qua
       if (!job.product_id) {
-        // Ảnh là BEST-EFFORT → KHÔNG đẩy vào failures (không chặn đăng), chỉ log.
-        emit({ ...base, status: 'warn', message: '✗ Thiếu product_id để upload ảnh — bỏ qua ảnh' })
+        // Ảnh RÀNG BUỘC đăng → đẩy vào failures (job thành 'error', KHÔNG đăng).
+        failures.push('Thiếu product_id để upload ảnh')
+        emit({ ...base, status: 'warn', message: '✗ Thiếu product_id để upload ảnh' })
         break
       }
       emit({ ...base, status: 'generating', message: `Đang tạo ảnh ${i + 1}/${descs.length} (AI)...` })
@@ -283,19 +284,21 @@ async function generateContent(
         queueStore.markStageB(job.id, { images_json: JSON.stringify(images) }) // checkpoint từng ảnh
         emit({ ...base, status: 'content', message: `✓ Xong ảnh ${i + 1}/${descs.length}` })
       } catch (e) {
-        // Ảnh là BEST-EFFORT → KHÔNG đẩy vào failures (không chặn đăng); placeholder ảnh này
-        // sẽ được upsertContent gỡ bỏ, SP vẫn đăng bình thường. Chỉ log để theo dõi.
+        // Ảnh RÀNG BUỘC đăng → đẩy vào failures: job thành 'error', KHÔNG upsert. Vẫn giữ text đã
+        // checkpoint; user bấm "chạy lại" sẽ chỉ làm nốt ảnh còn thiếu (detail/thông số/SEO skip).
         const m = (e as Error).message
-        emit({ ...base, status: 'warn', message: `✗ Ảnh ${i + 1}/${descs.length} lỗi: ${m} — bỏ ảnh này, vẫn đăng` })
+        failures.push(`Ảnh ${i + 1} lỗi: ${m}`)
+        emit({ ...base, status: 'warn', message: `✗ Ảnh ${i + 1}/${descs.length} lỗi: ${m}` })
       }
     }
   }
 
-  // ===== Chốt: chỉ TEXT (mô tả + thông số + SEO) mới ràng buộc; ẢNH là best-effort =====
-  // Ảnh nào tạo được thì chèn, ảnh nào fail thì upsertContent gỡ placeholder & đăng bình thường.
+  // ===== Chốt: đủ cả TEXT (mô tả + thông số + SEO) VÀ ẢNH (mọi placeholder có ảnh) mới đăng =====
+  // Ảnh là RÀNG BUỘC: nếu có placeholder mà chưa tạo/upload được đủ → KHÔNG đăng (job 'error').
   const totalImgs = detailOk ? extractImagePlaceholders(rawDetail).length : 0
   const okImgs = images.filter((s) => !!s?.url).length
-  const contentOk = detailOk && attributes.length > 0 && isSeoComplete(seoJson)
+  const imagesOk = detailOk && okImgs >= totalImgs
+  const contentOk = detailOk && attributes.length > 0 && isSeoComplete(seoJson) && imagesOk
 
   if (contentOk) {
     queueStore.markStageB(job.id, { stage_b: 'content', last_error: null })
@@ -303,9 +306,11 @@ async function generateContent(
     emit({ ...base, status: 'content', message: `✓ Đủ nội dung (${attributes.length} thông số${imgNote}) — chờ đăng` })
     return true
   }
-  // Thiếu task TEXT → đánh 'error' NGAY, KHÔNG upsert, KHÔNG tự chạy lại. Vẫn giữ phần đã checkpoint;
-  // user bấm "chạy lại" → retryErrors đưa về pending, lần sau chỉ làm nốt task còn thiếu.
-  // (failures chỉ còn lỗi text vì lỗi ảnh không được đẩy vào — ảnh không chặn đăng.)
+  // Thiếu task (text HOẶC ảnh) → đánh 'error' NGAY, KHÔNG upsert, KHÔNG tự chạy lại. Vẫn giữ phần đã
+  // checkpoint; user bấm "chạy lại" → retryErrors đưa về pending, lần sau chỉ làm nốt task còn thiếu.
+  if (!imagesOk && failures.length === 0) {
+    failures.push(`Thiếu ảnh sơ đồ (${okImgs}/${totalImgs} ảnh tạo được)`)
+  }
   const msg = failures.length ? failures.join('; ') : 'Thiếu dữ liệu nội dung'
   queueStore.markStageB(job.id, { stage_b: 'error', last_error: msg })
   emit({ ...base, status: 'error', message: msg })
