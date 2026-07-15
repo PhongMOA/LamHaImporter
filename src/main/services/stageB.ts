@@ -10,7 +10,7 @@
 // Tuần tự (Bridge 1 job/lần), throttle né rate-limit, retry backoff, resume qua queue.
 // ============================================================================
 
-import type { JobRow, Attribute } from '@shared/types'
+import type { JobRow, Attribute, AskResult, ExtractRule } from '@shared/types'
 import { queueStore } from './queueStore'
 import { SiteClient } from './siteClient'
 import { configStore } from './config'
@@ -70,6 +70,33 @@ export function cancelStageB(runId?: string): void {
 interface ImageSlot {
   desc: string
   url: string | null
+}
+
+/** Extension báo không quay lại được conversation của task mô tả (chat trôi khỏi sidebar / id lệch URL). */
+function isConversationError(msg: string): boolean {
+  return /chuyen duoc toi conversation/i.test(msg)
+}
+
+/**
+ * Hỏi GPT trong conversation của task mô tả; nếu extension KHÔNG quay lại được chat đó
+ * → thử lại bằng CHAT MỚI thay vì để cả sản phẩm fail.
+ * An toàn: prompt thông số/SEO tự chứa đủ ngữ cảnh sản phẩm (tên, model, hãng, xuất xứ),
+ * không cần lịch sử chat của task mô tả — conversation chung chỉ là tối ưu.
+ */
+async function askWithNewChatFallback(
+  prompt: string,
+  conversationId: string | null,
+  opts: { extract?: ExtractRule; image?: boolean; timeoutMs?: number },
+  onFallback: (reason: string) => void
+): Promise<AskResult> {
+  try {
+    return await embeddedBridge.ask(prompt, { ...opts, conversationId: conversationId || undefined })
+  } catch (e) {
+    const m = (e as Error).message || ''
+    if (!conversationId || !isConversationError(m)) throw e
+    onFallback(m)
+    return await embeddedBridge.ask(prompt, { ...opts, newChat: true })
+  }
 }
 
 function safeParseAttributes(json: string | null): Attribute[] {
@@ -189,10 +216,13 @@ async function generateContent(
   if (attributes.length === 0) {
     emit({ ...base, status: 'generating', message: 'Đang sinh thông số (AI)...' })
     try {
-      const specRes = await embeddedBridge.ask(buildSpecPrompt(draft), {
-        conversationId: conversationId || undefined,
-        extract: { type: 'code', lang: 'json' }
-      })
+      const specRes = await askWithNewChatFallback(
+        buildSpecPrompt(draft),
+        conversationId,
+        { extract: { type: 'code', lang: 'json' } },
+        () =>
+          emit({ ...base, status: 'warn', message: '⚠ Không quay lại được chat mô tả — sinh thông số ở chat mới' })
+      )
       const parsed = parseAttributes(specRes.answer, specRes.rawAnswer)
       if (parsed.attributes.length > 0) {
         attributes = parsed.attributes
@@ -215,10 +245,12 @@ async function generateContent(
   if (!isSeoComplete(seoJson)) {
     emit({ ...base, status: 'generating', message: 'Đang sinh SEO (AI)...' })
     try {
-      const seoRes = await embeddedBridge.ask(buildSeoPrompt(draft), {
-        conversationId: conversationId || undefined,
-        extract: { type: 'code', lang: 'json' }
-      })
+      const seoRes = await askWithNewChatFallback(
+        buildSeoPrompt(draft),
+        conversationId,
+        { extract: { type: 'code', lang: 'json' } },
+        () => emit({ ...base, status: 'warn', message: '⚠ Không quay lại được chat mô tả — sinh SEO ở chat mới' })
+      )
       const seo = parseSeo(seoRes.answer, seoRes.rawAnswer)
       if (seo.meta_title && seo.meta_desc && seo.tags.length > 0) {
         seoJson = JSON.stringify({ meta_title: seo.meta_title, meta_desc: seo.meta_desc, tags: seo.tags })
@@ -254,13 +286,22 @@ async function generateContent(
       }
       emit({ ...base, status: 'generating', message: `Đang tạo ảnh ${i + 1}/${descs.length} (AI)...` })
       try {
-        const imgRes = await embeddedBridge.ask(buildDetailImagePrompt(draft, descs[i]), {
-          conversationId: conversationId || undefined,
-          image: true,
-          // Trần chờ ảnh = cấu hình (Settings → tạo ảnh), tối thiểu 60s. Giá trị này được truyền
-          // xuống extension làm trần render DALL-E; extension gửi heartbeat 5s giữ idle-timer này sống.
-          timeoutMs: Math.max(60, cfg.detailImageTimeoutSec || 300) * 1000
-        })
+        const imgRes = await askWithNewChatFallback(
+          buildDetailImagePrompt(draft, descs[i]),
+          conversationId,
+          {
+            image: true,
+            // Trần chờ ảnh = cấu hình (Settings → tạo ảnh), tối thiểu 60s. Giá trị này được truyền
+            // xuống extension làm trần render DALL-E; extension gửi heartbeat 5s giữ idle-timer này sống.
+            timeoutMs: Math.max(60, cfg.detailImageTimeoutSec || 300) * 1000
+          },
+          () =>
+            emit({
+              ...base,
+              status: 'warn',
+              message: `⚠ Không quay lại được chat mô tả — vẽ ảnh ${i + 1} ở chat mới`
+            })
+        )
         const dataUrl = (imgRes.images || []).find((u) => !!u)
         if (!dataUrl) throw new Error('AI không trả ảnh')
         const decoded = decodeDataUrl(dataUrl)
