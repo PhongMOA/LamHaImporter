@@ -10,9 +10,10 @@
 //     do user map 1 lần; thiếu thì tạo chủ động qua POST /api/taxonomies + cache.
 // ============================================================================
 
-import type { ProductDraft, AppConfig } from '@shared/types'
+import type { ProductDraft, AppConfig, ProductFilter, FilterPair } from '@shared/types'
+import { filterKey } from '@shared/mapping'
 import { configStore } from './config'
-import type { SiteClient, TaxNode } from './siteClient'
+import type { SiteClient, TaxNode, TaxFilterAttr } from './siteClient'
 
 /** Payload taxonomy cho PUT: form chứa temp id + mảng new_*. */
 export interface TaxPutPayload {
@@ -43,6 +44,8 @@ export class TaxonomyResolver {
   // category: meta_slug(lowercase) → _id ; spec_group: text(chuẩn hoá) → _id.
   private liveCate: Record<string, string> | null = null
   private liveSpecGroup: Record<string, string> | null = null
+  // Thuộc tính lọc theo từng danh mục: cateId → filters[] (đọc kèm khi nạp cây category).
+  private liveFilters: Record<string, TaxFilterAttr[]> = {}
 
   constructor(
     private client: SiteClient,
@@ -74,8 +77,10 @@ export class TaxonomyResolver {
     try {
       const cates = await this.client.fetchTaxonomyTree('category')
       this.liveCate = {}
+      this.liveFilters = {}
       for (const n of this.flatten(cates)) {
         if (n.meta_slug) this.liveCate[n.meta_slug.toLowerCase()] = String(n._id)
+        if (n.filters && n.filters.length) this.liveFilters[String(n._id)] = n.filters
       }
     } catch {
       this.liveCate = null
@@ -104,6 +109,49 @@ export class TaxonomyResolver {
     if (!text) return undefined
     const key = text.trim().toLowerCase()
     return this.liveSpecGroup?.[key] ?? this.siteMap().spec_group[key]
+  }
+
+  /**
+   * Map thuộc tính lọc (text từ Excel) → Product.filters [{attr_id, values[]}] theo đúng
+   * bộ thuộc tính của DANH MỤC sản phẩm. Không tạo mới gì trên site: tên thuộc tính hoặc
+   * giá trị không khớp ⇒ bỏ qua + trả cảnh báo để UI hiện cho user tự thêm trong admin.
+   *
+   * So khớp bằng filterKey (bỏ dấu + bỏ ký tự đặc biệt) nên "220 VAC" khớp "220VAC".
+   */
+  resolveFilters(
+    cateId: string | undefined,
+    pairs: FilterPair[]
+  ): { filters: ProductFilter[]; warnings: string[] } {
+    const filters: ProductFilter[] = []
+    const warnings: string[] = []
+    if (!pairs || pairs.length === 0) return { filters, warnings }
+    if (!cateId) {
+      warnings.push('Có thuộc tính lọc nhưng chưa map được danh mục')
+      return { filters, warnings }
+    }
+    const attrs = this.liveFilters[cateId]
+    if (!attrs || attrs.length === 0) {
+      warnings.push('Danh mục chưa cấu hình thuộc tính lọc nào trên site')
+      return { filters, warnings }
+    }
+    for (const pair of pairs) {
+      const attr = attrs.find((a) => filterKey(a.text) === filterKey(pair.name))
+      if (!attr) {
+        warnings.push(`Thuộc tính lọc "${pair.name}" không có trong danh mục`)
+        continue
+      }
+      const ids: string[] = []
+      for (const raw of pair.values) {
+        const val = (attr.values || []).find((v) => filterKey(v.text) === filterKey(raw))
+        if (!val) {
+          warnings.push(`Giá trị "${raw}" không có trong thuộc tính "${attr.text}"`)
+          continue
+        }
+        if (!ids.includes(String(val._id))) ids.push(String(val._id))
+      }
+      if (ids.length) filters.push({ attr_id: String(attr._id), values: ids })
+    }
+    return { filters, warnings }
   }
 
   /** Tạo taxonomy mới (cate/spec_group) qua POST + cache vào config & map sống. Có rủi ro trùng
@@ -144,6 +192,10 @@ export class TaxonomyResolver {
     } else {
       draft.specGroupId = specId
     }
+    // thuộc tính lọc: resolve theo danh mục vừa map; phần không khớp chỉ cảnh báo (không tạo mới)
+    const { filters, warnings } = this.resolveFilters(draft.cateId, draft.filterPairs)
+    draft.filters = filters
+    draft.errors.push(...warnings)
   }
 
   /** Dựng payload new_* cho brand/series/madein (lamha tự resolve-or-create khi PUT). */

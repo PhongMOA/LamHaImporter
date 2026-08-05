@@ -45,6 +45,11 @@ function buildCreateForm(draft: ProductDraft, resolver: TaxonomyResolver): Recor
   if (cateId) form.cate = cateId
   const specId = resolver.resolveSpecGroup(draft.specGroupText)
   if (specId) form.spec_group = specId
+  // Thuộc tính lọc: resolve lại theo map sống lúc chạy; nếu không nạp được map (thiếu tài khoản
+  // admin) thì dùng kết quả đã resolve lúc parse Excel.
+  const resolved = resolver.resolveFilters(cateId, draft.filterPairs).filters
+  const filters = resolved.length ? resolved : draft.filters || []
+  if (filters.length) form.filters = filters
   return form
 }
 

@@ -119,12 +119,15 @@ function safeParseImages(json: string | null): ImageSlot[] {
   }
 }
 
-/** SEO "đủ dữ liệu" = có cả meta_title, meta_desc và ít nhất 1 tag. */
-function isSeoComplete(seoJson: string | null): boolean {
+/** SEO "đủ dữ liệu" = có cả meta_title, meta_desc và ít nhất 1 tag.
+ *  `requireTags=false` (cấu hình tắt tạo tag) → chỉ cần meta_title + meta_desc. */
+function isSeoComplete(seoJson: string | null, requireTags = true): boolean {
   if (!seoJson) return false
   try {
     const s = JSON.parse(seoJson) as { meta_title?: string; meta_desc?: string; tags?: unknown }
-    return !!(s.meta_title && s.meta_desc && Array.isArray(s.tags) && s.tags.length > 0)
+    if (!s.meta_title || !s.meta_desc) return false
+    if (!requireTags) return true
+    return Array.isArray(s.tags) && s.tags.length > 0
   } catch {
     return false
   }
@@ -157,6 +160,8 @@ async function generateContent(
   const sitePromptInfo = { name: site?.label, url: site?.baseUrl }
   // Tắt cấu hình tạo ảnh → không truyền yêu cầu ảnh → prompt không chèn placeholder, Pha B không vẽ ảnh.
   const imageRequests = cfg.detailImageEnabled === false ? [] : cfg.detailImageRequests || []
+  // Tắt cấu hình tạo tag → prompt SEO không xin tags, thiếu tag không tính là lỗi, đăng không gửi tag.
+  const seoTagEnabled = cfg.seoTagEnabled !== false
 
   const health = embeddedBridge.health()
   if (!health.extensionConnected) {
@@ -242,22 +247,27 @@ async function generateContent(
 
   // ===== Task 3: SEO (title + desc + tags) — prompt tự chứa ngữ cảnh =====
   ckCancel()
-  if (!isSeoComplete(seoJson)) {
+  if (!isSeoComplete(seoJson, seoTagEnabled)) {
     emit({ ...base, status: 'generating', message: 'Đang sinh SEO (AI)...' })
     try {
       const seoRes = await askWithNewChatFallback(
-        buildSeoPrompt(draft),
+        buildSeoPrompt(draft, seoTagEnabled),
         conversationId,
         { extract: { type: 'code', lang: 'json' } },
         () => emit({ ...base, status: 'warn', message: '⚠ Không quay lại được chat mô tả — sinh SEO ở chat mới' })
       )
       const seo = parseSeo(seoRes.answer, seoRes.rawAnswer)
-      if (seo.meta_title && seo.meta_desc && seo.tags.length > 0) {
-        seoJson = JSON.stringify({ meta_title: seo.meta_title, meta_desc: seo.meta_desc, tags: seo.tags })
+      // Tắt tạo tag → bỏ luôn tags AI lỡ trả về, để checkpoint không lưu tag thừa.
+      const tags = seoTagEnabled ? seo.tags : []
+      if (seo.meta_title && seo.meta_desc && (!seoTagEnabled || tags.length > 0)) {
+        seoJson = JSON.stringify({ meta_title: seo.meta_title, meta_desc: seo.meta_desc, tags })
         queueStore.markStageB(job.id, { seo_json: seoJson })
-        emit({ ...base, status: 'content', message: `✓ Xong SEO (${seo.tags.length} tags)` })
+        const tagNote = seoTagEnabled ? `${tags.length} tags` : 'không tạo tag'
+        emit({ ...base, status: 'content', message: `✓ Xong SEO (${tagNote})` })
       } else {
-        const m = 'SEO thiếu dữ liệu (cần đủ tiêu đề, mô tả và tags)'
+        const m = seoTagEnabled
+          ? 'SEO thiếu dữ liệu (cần đủ tiêu đề, mô tả và tags)'
+          : 'SEO thiếu dữ liệu (cần đủ tiêu đề và mô tả)'
         failures.push(m)
         emit({ ...base, status: 'warn', message: `✗ ${m}` })
       }
@@ -339,7 +349,7 @@ async function generateContent(
   const totalImgs = detailOk ? extractImagePlaceholders(rawDetail).length : 0
   const okImgs = images.filter((s) => !!s?.url).length
   const imagesOk = detailOk && okImgs >= totalImgs
-  const contentOk = detailOk && attributes.length > 0 && isSeoComplete(seoJson) && imagesOk
+  const contentOk = detailOk && attributes.length > 0 && isSeoComplete(seoJson, seoTagEnabled) && imagesOk
 
   if (contentOk) {
     queueStore.markStageB(job.id, { stage_b: 'content', last_error: null })
@@ -383,7 +393,9 @@ async function upsertContent(job: JobRow, client: SiteClient, emit: (p: StagePro
       const seo = JSON.parse(job.seo_json) as { meta_title?: string; meta_desc?: string; tags?: string[] }
       if (seo.meta_title) form.meta_title = seo.meta_title
       if (seo.meta_desc) form.meta_desc = seo.meta_desc
-      const tags = (seo.tags || []).map((t) => String(t).trim()).filter(Boolean)
+      // Tắt tạo tag → KHÔNG gửi tag/new_tag (chặn cả job cũ đã checkpoint sẵn tags trước khi tắt).
+      const seoTagEnabled = configStore.get().seoTagEnabled !== false
+      const tags = seoTagEnabled ? (seo.tags || []).map((t) => String(t).trim()).filter(Boolean) : []
       if (tags.length) {
         // tag là taxonomy: gửi tempId trong form.tag + new_tag (controller resolve-or-create theo meta_slug).
         form.tag = tags.map((_, i) => `tmp_tag_${job.row_index}_${i}`)

@@ -21,6 +21,7 @@ export type ColKey =
   | 'price'
   | 'alsoBuy'
   | 'specInstruction'
+  | 'filterSpec'
 
 /** Header Excel (chuẩn hoá lowercase, bỏ dấu) → ColKey. Vị trí cột là fallback. */
 export const HEADER_MAP: Record<ColKey, { labels: string[]; col: number }> = {
@@ -39,7 +40,8 @@ export const HEADER_MAP: Record<ColKey, { labels: string[]; col: number }> = {
   status: { labels: ['tinh trang'], col: 12 },
   price: { labels: ['gia san pham', 'gia'], col: 13 },
   alsoBuy: { labels: ['san pham mua cung'], col: 14 },
-  specInstruction: { labels: ['thong so ky thuat'], col: 15 }
+  specInstruction: { labels: ['thong so ky thuat'], col: 15 },
+  filterSpec: { labels: ['thuoc tinh loc', 'bo loc'], col: 16 }
 }
 
 /** Bỏ dấu tiếng Việt + lowercase + trim để so khớp header. */
@@ -93,6 +95,58 @@ export function slugFromUrl(raw: unknown): string {
     // không phải URL → coi như đã là slug/text
     return s.split('/').filter(Boolean).pop() || s
   }
+}
+
+// ------------------------------------------------------- thuộc tính lọc (filters)
+
+/** 1 cặp thuộc tính lọc đọc từ Excel: tên thuộc tính + các giá trị được chọn (dạng text). */
+export interface FilterPair {
+  name: string
+  values: string[]
+}
+
+/**
+ * Khoá so khớp "lỏng" cho tên thuộc tính/giá trị: bỏ dấu, lowercase, bỏ mọi ký tự không
+ * phải chữ/số. Nhờ vậy "220 VAC" ≡ "220VAC", "Điện áp cuộn Coil" ≡ "dien ap cuon coil".
+ */
+export function filterKey(s: unknown): string {
+  return String(s ?? '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[đĐ]/g, 'd')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+}
+
+/**
+ * Parse ô "Thuộc tính lọc" → danh sách cặp {tên, giá trị[]}.
+ * Cú pháp: `Tên thuộc tính: gt1, gt2; Tên khác: gt3`
+ *   - Ngăn giữa các thuộc tính: `;` hoặc xuống dòng (`|` cũng chấp nhận).
+ *   - Ngăn tên ↔ giá trị: `:` hoặc `=` (dấu ĐẦU TIÊN — giá trị vẫn được chứa ':' phía sau).
+ *   - Ngăn nhiều giá trị của cùng thuộc tính: `,` hoặc `/`.
+ * Đoạn không có dấu `:`/`=` bị bỏ qua (coi như ghi chú).
+ */
+export function parseFilterSpec(raw: unknown): FilterPair[] {
+  const s = String(raw ?? '').trim()
+  if (!s) return []
+  const out: FilterPair[] = []
+  for (const chunk of s.split(/[;\n|]+/)) {
+    const part = chunk.trim()
+    if (!part) continue
+    const m = part.match(/^([^:=]+)[:=]([\s\S]*)$/)
+    if (!m) continue
+    const name = m[1].trim()
+    const values = m[2]
+      .split(/[,/]/)
+      .map((v) => v.trim())
+      .filter(Boolean)
+    if (!name || values.length === 0) continue
+    // cùng tên xuất hiện nhiều lần → gộp giá trị
+    const existing = out.find((p) => filterKey(p.name) === filterKey(name))
+    if (existing) existing.values.push(...values)
+    else out.push({ name, values })
+  }
+  return out
 }
 
 /** Split danh sách link "a, b , c" → ['a','b','c']. */

@@ -135,6 +135,56 @@ export function stripCitations(text: string): string {
     .replace(/[ \t]+([.,;:!?)])/g, '$1') // dọn khoảng trắng lẻ trước dấu câu sau khi gỡ
 }
 
+/** Nhãn nút/UI của trang chat (ChatGPT/Gemini) lọt vào bài khi bridge đọc text theo cả
+ *  khối turn thay vì riêng vùng `.markdown` — VD dòng "Sửa" đứng trơ ngay trên tiêu đề bài.
+ *  Chỉ khớp khi nhãn đứng RIÊNG (dòng độc lập hoặc <p>/<div>… chỉ chứa nhãn) ở ĐẦU/CUỐI bài
+ *  và trùng KHỚP HOÀN TOÀN → không đụng chữ "Sửa"/"Lưu" nằm trong câu của bài viết. */
+const UI_LABELS = [
+  // ChatGPT / Gemini tiếng Việt
+  'Sửa', 'Chỉnh sửa', 'Sao chép', 'Đã sao chép', 'Sao chép mã', 'Thử lại', 'Tạo lại',
+  'Chia sẻ', 'Đọc to', 'Phản hồi tốt', 'Phản hồi kém', 'Thích', 'Không thích',
+  'Xem thêm', 'Hiện thêm', 'Thu gọn', 'Nguồn', 'Xong', 'Huỷ', 'Hủy', 'Lưu',
+  'Tải xuống', 'Xoá', 'Xóa', 'Bạn đã nói:', 'ChatGPT đã nói:', 'Gemini đã nói:',
+  // Bản tiếng Anh
+  'Edit', 'Copy', 'Copied', 'Copy code', 'Retry', 'Regenerate', 'Share', 'Read aloud',
+  'Good response', 'Bad response', 'Show more', 'Show less', 'Sources', 'Done', 'Cancel',
+  'Save', 'Download', 'Delete', 'You said:', 'ChatGPT said:'
+]
+
+const UI_LABEL_ALT = UI_LABELS.map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
+/** Nhãn trơ ở đầu bài: hết dòng hoặc ngay trước thẻ HTML đầu tiên (bài xuất 1 dòng duy nhất). */
+const UI_LEAD_BARE = new RegExp(`^\\s*(?:${UI_LABEL_ALT})\\s*(?:\\r?\\n|(?=<))`, 'i')
+/** Nhãn bị bọc thẻ ở đầu bài: `<p>Sửa</p>`, `<div>Copy</div>`… */
+const UI_LEAD_WRAPPED = new RegExp(
+  `^\\s*<(p|div|span|h[1-6])\\b[^>]*>\\s*(?:${UI_LABEL_ALT})\\s*<\\/\\1>\\s*`,
+  'i'
+)
+/** Dòng "Đã suy nghĩ trong 12 giây" / "Thought for 12s" ChatGPT chèn trước câu trả lời. */
+const UI_LEAD_THINKING = /^\s*(?:Đã suy nghĩ|Thought for|Reasoned for|Đang suy nghĩ)[^\n<]*(?:\r?\n|(?=<))/i
+/** Nhãn trơ ở cuối bài (phải đứng sau xuống dòng hoặc sau một thẻ đóng). */
+const UI_TAIL_BARE = new RegExp(`(?<=[\\n>])\\s*(?:${UI_LABEL_ALT})\\s*$`, 'i')
+const UI_TAIL_WRAPPED = new RegExp(
+  `\\s*<(p|div|span|h[1-6])\\b[^>]*>\\s*(?:${UI_LABEL_ALT})\\s*<\\/\\1>\\s*$`,
+  'i'
+)
+
+/** Gỡ nhãn UI trang chat lẫn ở đầu/cuối bài (lặp vì có thể dính vài nhãn liền nhau). */
+export function stripUiChrome(html: string): string {
+  if (typeof html !== 'string' || !html) return html || ''
+  let s = html.normalize('NFC') // web hay trả dấu tổ hợp (NFD) → chuẩn hoá để khớp nhãn
+  for (let i = 0; i < 8; i++) {
+    const before = s
+    s = s
+      .replace(UI_LEAD_THINKING, '')
+      .replace(UI_LEAD_WRAPPED, '')
+      .replace(UI_LEAD_BARE, '')
+      .replace(UI_TAIL_WRAPPED, '')
+      .replace(UI_TAIL_BARE, '')
+    if (s === before) break
+  }
+  return s.trim()
+}
+
 /** Token placeholder ảnh do AI chèn trong detail: `[[IMAGE: mô tả sơ đồ...]]`. */
 const IMG_PLACEHOLDER = /\[\[IMAGE:\s*([\s\S]*?)\]\]/i
 const IMG_PLACEHOLDER_G = /\[\[IMAGE:\s*([\s\S]*?)\]\]/gi
@@ -169,12 +219,13 @@ export function unwrapCodeFence(html: string): string {
 
 /** Làm sạch detail HTML trước khi đăng:
  *  - Gỡ vỏ markdown (code fence ```html```, nhãn "HTML" trơ) GPT hay bọc quanh bài.
+ *  - Gỡ nhãn UI trang chat lẫn vào đầu/cuối bài ("Sửa", "Sao chép", "Đã suy nghĩ…").
  *  - Gỡ marker trích dẫn ChatGPT (:contentReference[oaicite...], 【…†…】, ký tự PUA).
  *  - Bỏ <img> có src TUYỆT ĐỐI (http/https/data/protocol-relative) — AI hay bịa URL ngoài → ảnh vỡ.
  *  - GIỮ <img> src NỘI BỘ (bắt đầu '/...') vì đó là ảnh sơ đồ ta tự tải về & upload lên server.
  *  - Bỏ vỏ <figure>/<picture> rỗng và các <p></p> rỗng (ví dụ sau khi gỡ placeholder). */
 export function sanitizeDetail(html: string): string {
-  return stripCitations(unwrapCodeFence(html))
+  return stripUiChrome(stripCitations(unwrapCodeFence(html)))
     .replace(/<img\b[^>]*>/gi, (tag) => {
       const m = tag.match(/\bsrc\s*=\s*["']([^"']*)["']/i)
       const src = (m ? m[1] : '').trim()

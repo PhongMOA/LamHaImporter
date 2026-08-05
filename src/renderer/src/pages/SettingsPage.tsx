@@ -41,7 +41,8 @@ export function SettingsPage(): React.ReactElement {
         bridgePort: config.bridgePort,
         bridgeToken: config.bridgeToken,
         throttleMs: config.throttleMs,
-        autoCreateSpecGroup: config.autoCreateSpecGroup
+        autoCreateSpecGroup: config.autoCreateSpecGroup,
+        seoTagEnabled: config.seoTagEnabled !== false
       })
       imageForm.setFieldsValue(config.imageProcess)
       imgReqForm.setFieldsValue({
@@ -190,6 +191,14 @@ export function SettingsPage(): React.ReactElement {
               name="autoCreateSpecGroup"
               label="Tự tạo nhóm thông số khi thiếu"
               valuePropName="checked"
+            >
+              <Switch />
+            </Form.Item>
+            <Form.Item
+              name="seoTagEnabled"
+              label="Tạo tag SEO cho sản phẩm"
+              valuePropName="checked"
+              tooltip="Tắt thì bỏ hẳn bước tạo tag: prompt SEO không xin tags, thiếu tag không tính là lỗi, và lúc đăng không gửi tag lên site. Tiêu đề & mô tả SEO vẫn chạy bình thường."
             >
               <Switch />
             </Form.Item>

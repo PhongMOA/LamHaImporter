@@ -45,12 +45,20 @@ interface MediaDoc {
   created_at?: string | number
 }
 
+/** 1 thuộc tính lọc của danh mục (Taxonomy.filters trong lamha). */
+export interface TaxFilterAttr {
+  _id: string
+  text: string
+  values?: Array<{ _id: string; text: string }>
+}
+
 /** 1 node taxonomy đọc từ trang admin (window.items_top_level). */
 export interface TaxNode {
   _id: string
   text: string
   meta_slug?: string
   tax_type?: string
+  filters?: TaxFilterAttr[]
   children?: TaxNode[]
 }
 

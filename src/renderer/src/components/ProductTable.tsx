@@ -47,6 +47,23 @@ export function ProductTable({ drafts }: { drafts: ProductDraft[] }): React.Reac
           )
         },
         {
+          title: 'Thuộc tính lọc',
+          width: 200,
+          render: (_, r) => {
+            const pairs = r.filterPairs || []
+            if (!pairs.length) return <span style={{ fontSize: 12, color: '#9fb2ae' }}>—</span>
+            const matched = (r.filters || []).length
+            const text = pairs.map((p) => `${p.name}: ${p.values.join(', ')}`).join('\n')
+            return (
+              <Tooltip title={text}>
+                <Tag color={matched === pairs.length ? 'blue' : 'warning'}>
+                  {matched}/{pairs.length} thuộc tính
+                </Tag>
+              </Tooltip>
+            )
+          }
+        },
+        {
           title: 'BH',
           dataIndex: 'warranty',
           width: 56,

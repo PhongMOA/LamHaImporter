@@ -17,6 +17,7 @@ function defaultConfig(): AppConfig {
     imageFolder: '',
     throttleMs: 1500,
     autoCreateSpecGroup: true,
+    seoTagEnabled: true,
     imageProcess: { enabled: true, size: 800, quality: 82, fit: 'contain' },
     detailImageEnabled: true,
     detailImageRequests: [

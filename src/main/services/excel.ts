@@ -9,7 +9,8 @@ import {
   slugFromUrl,
   splitLinks,
   looksLikeNote,
-  normalizeHeader
+  normalizeHeader,
+  parseFilterSpec
 } from '@shared/mapping'
 import { matchImages } from './image'
 
@@ -59,6 +60,7 @@ export function parseExcel(filePath: string, opts: ParseOptions): ParseResult {
     const detailRaw = cell(row, col.detailInstruction)
     const specRaw = cell(row, col.specInstruction)
     const alsoBuyRaw = cell(row, col.alsoBuy)
+    const filterRaw = cell(row, col.filterSpec)
 
     const draft: ProductDraft = {
       rowIndex: r,
@@ -80,6 +82,8 @@ export function parseExcel(filePath: string, opts: ParseOptions): ParseResult {
       seriesText: cell(row, col.series),
       madeinText: cell(row, col.madein),
       specGroupText: cell(row, col.specGroup),
+      // Ô ghi chú/hướng dẫn ở cột này (file mẫu cũ) → coi như trống.
+      filterPairs: looksLikeNote(filterRaw) ? [] : parseFilterSpec(filterRaw),
       imageSlug,
       imageFiles: [],
       alsoBuyLinks: looksLikeNote(alsoBuyRaw) ? [] : splitLinks(alsoBuyRaw),

@@ -3,10 +3,21 @@
 // Khớp modules/product/models/Product.js của lamha.
 // ============================================================================
 
+import type { FilterPair } from './mapping'
+
+export type { FilterPair }
+
 export interface Attribute {
   title: string
   value: string
   url?: string
+}
+
+/** Thuộc tính lọc của 1 sản phẩm sau khi resolve text → ObjectId của danh mục.
+ *  Khớp Product.filters trong modules/product/models/Product.js. */
+export interface ProductFilter {
+  attr_id: string
+  values: string[]
 }
 
 export interface ProductImage {
@@ -42,6 +53,9 @@ export interface ProductDraft {
   seriesIds?: string[]
   madeinId?: string
   specGroupId?: string
+  // thuộc tính lọc (cột "Thuộc tính lọc") — text người dùng nhập + kết quả resolve theo danh mục
+  filterPairs: FilterPair[] // {name, values[]} parse từ Excel
+  filters?: ProductFilter[] // đã resolve sang ObjectId (chỉ giá trị khớp danh mục)
   imageSlug: string // cột 4 — tiền tố tên file ảnh
   imageFiles: string[] // đường dẫn ảnh local đã match (tuyệt đối)
   alsoBuyLinks: string[]
@@ -87,6 +101,9 @@ export interface AppConfig {
   imageFolder: string
   throttleMs: number // throttle giữa các lượt AI (Pha B)
   autoCreateSpecGroup: boolean // tự tạo nhóm thông số (spec_group) trên site khi chưa tồn tại
+  // Bật/tắt tạo tag SEO cho sản phẩm. Tắt → prompt SEO KHÔNG xin tags, không coi thiếu tag là lỗi,
+  // và lúc đăng KHÔNG gửi tag/new_tag lên site (meta_title/meta_desc vẫn chạy bình thường).
+  seoTagEnabled: boolean
   imageProcess: ImageProcessConfig // xử lý ảnh (resize vuông + nén webp) trước khi upload
   // Bật/tắt tạo ảnh nội dung. Tắt → bài KHÔNG có ảnh kèm (không chèn placeholder, không vẽ ảnh).
   detailImageEnabled: boolean

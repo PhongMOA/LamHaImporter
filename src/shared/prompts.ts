@@ -115,8 +115,9 @@ export function buildDetailImagePrompt(draft: ProductDraft, description: string)
 }
 
 /** Prompt sinh dữ liệu SEO cho sản phẩm: Title SEO, Meta description SEO và tags → JSON object.
- *  Bọc ```json. Gọi cùng conversation với detail để AI bám đúng ngữ cảnh bài vừa viết. */
-export function buildSeoPrompt(draft: ProductDraft): string {
+ *  Bọc ```json. Gọi cùng conversation với detail để AI bám đúng ngữ cảnh bài vừa viết.
+ *  `includeTags=false` (cấu hình tắt tạo tag) → không xin tags, JSON chỉ còn meta_title/meta_desc. */
+export function buildSeoPrompt(draft: ProductDraft, includeTags = true): string {
   const ctx = [
     `Tên sản phẩm: ${draft.title}`,
     draft.model ? `Mã hàng/Model: ${draft.model}` : '',
@@ -132,17 +133,24 @@ export function buildSeoPrompt(draft: ProductDraft): string {
     'Thông tin sản phẩm:',
     ctx,
     '',
-    'Hãy tạo dữ liệu SEO cho ĐÚNG sản phẩm trên, gồm 3 phần:',
+    `Hãy tạo dữ liệu SEO cho ĐÚNG sản phẩm trên, gồm ${includeTags ? '3' : '2'} phần:`,
     '- meta_title: Tiêu đề SEO hấp dẫn, chứa tên sản phẩm/model và từ khoá chính, dài khoảng 50–60 ký tự.',
     '- meta_desc: Mô tả SEO (meta description) súc tích, kêu gọi nhấp chuột, chứa từ khoá chính, dài khoảng 140–160 ký tự.',
-    '- tags: 2–3 TỪ KHOÁ SEO mà người dùng thực sự gõ khi tìm mua sản phẩm này trên Google',
-    '  (cụm từ tìm kiếm: "mua <model>", "<model> giá bao nhiêu", "<tên sp> chính hãng", "báo giá <hãng> <dòng sp>",',
-    '  từ khoá theo công năng/ứng dụng/thông số nổi bật...). KHÔNG dùng nhãn phân loại chung chung',
-    '  (ví dụ KHÔNG dùng: "thiết bị điện", "sản phẩm", "công nghiệp"). Mỗi tag là một cụm tìm kiếm tự nhiên, KHÔNG trùng lặp.',
+    ...(includeTags
+      ? [
+          '- tags: 2–3 TỪ KHOÁ SEO mà người dùng thực sự gõ khi tìm mua sản phẩm này trên Google',
+          '  (cụm từ tìm kiếm: "mua <model>", "<model> giá bao nhiêu", "<tên sp> chính hãng", "báo giá <hãng> <dòng sp>",',
+          '  từ khoá theo công năng/ứng dụng/thông số nổi bật...). KHÔNG dùng nhãn phân loại chung chung',
+          '  (ví dụ KHÔNG dùng: "thiết bị điện", "sản phẩm", "công nghiệp"). Mỗi tag là một cụm tìm kiếm tự nhiên, KHÔNG trùng lặp.'
+        ]
+      : []),
     '',
     'QUY TẮC ĐẦU RA (bắt buộc):',
     '- Trả về DUY NHẤT một khối mã ```json chứa MỘT object JSON hợp lệ, đúng định dạng:',
-    '  {"meta_title":"...","meta_desc":"...","tags":["...","..."]}',
+    includeTags
+      ? '  {"meta_title":"...","meta_desc":"...","tags":["...","..."]}'
+      : '  {"meta_title":"...","meta_desc":"..."}',
+    ...(includeTags ? [] : ['- KHÔNG thêm trường "tags" hay bất kỳ trường nào khác ngoài 2 trường trên.']),
     '- Tất cả nội dung bằng tiếng Việt; KHÔNG kèm lời dẫn, KHÔNG chú thích ngoài khối mã.',
     '- KHÔNG bịa thông số kỹ thuật cụ thể trong meta_title/meta_desc.'
   ].join('\n')
