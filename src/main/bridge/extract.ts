@@ -4,43 +4,45 @@
 
 import type { ExtractRule } from '@shared/types'
 
-interface CodeBlock {
+export interface CodeBlock {
   lang: string
   content: string
+  closed: boolean // false = fence mở nhưng KHÔNG có fence đóng (lấy tới hết chuỗi)
 }
 
-/** Tách mọi fenced code block trong markdown (``` hoặc ~~~, fence >= 3). */
+/**
+ * Tách mọi fenced code block trong markdown (``` hoặc ~~~, fence >= 3).
+ *
+ * Quét THEO KÝ TỰ chứ không theo dòng: text đọc từ DOM ChatGPT hay dính fence vào cuối
+ * câu lời dẫn ("...tránh đưa thông số suy đoán.```html") — parser theo dòng sẽ trượt,
+ * khiến cả lời dẫn bị coi là bài viết. Fence mở nằm giữa dòng vẫn phải bắt được.
+ *
+ * Fence mở KHÔNG có fence đóng (câu trả lời bị cắt) vẫn trả về, với closed=false, để
+ * bên gọi tự quyết định — bỏ hẳn thì mất trắng bài đã viết gần xong.
+ */
 export function parseCodeBlocks(md: string): CodeBlock[] {
   const blocks: CodeBlock[] = []
   if (typeof md !== 'string' || !md) return blocks
 
-  const lines = md.split('\n')
-  let i = 0
-  while (i < lines.length) {
-    const open = lines[i].match(/^(\s{0,3})(`{3,}|~{3,})(.*)$/)
-    if (!open) {
-      i += 1
-      continue
-    }
-    const fenceChar = open[2][0]
-    const fenceLen = open[2].length
-    const lang = (open[3] || '').trim().split(/\s+/)[0].toLowerCase()
+  // fence mở + nhãn ngôn ngữ (nếu có) + nuốt luôn 1 lần xuống dòng ngay sau nhãn
+  const openRe = /(`{3,}|~{3,})[ \t]*([A-Za-z0-9_+#.-]*)[ \t]*\r?\n?/g
+  let m: RegExpExecArray | null
+  while ((m = openRe.exec(md)) !== null) {
+    const fence = m[1]
+    const lang = (m[2] || '').trim().toLowerCase()
+    const bodyStart = openRe.lastIndex
 
-    const body: string[] = []
-    let closed = false
-    i += 1
-    while (i < lines.length) {
-      const l = lines[i]
-      const close = l.match(/^(\s{0,3})(`{3,}|~{3,})\s*$/)
-      if (close && close[2][0] === fenceChar && close[2].length >= fenceLen) {
-        closed = true
-        i += 1
-        break
-      }
-      body.push(l)
-      i += 1
-    }
-    if (closed) blocks.push({ lang, content: body.join('\n') })
+    // fence đóng: cùng loại ký tự, độ dài >= fence mở, ở BẤT KỲ đâu (kể cả giữa dòng)
+    const closeRe = new RegExp(`${fence[0] === '`' ? '`' : '~'}{${fence.length},}`, 'g')
+    closeRe.lastIndex = bodyStart
+    const close = closeRe.exec(md)
+
+    const bodyEnd = close ? close.index : md.length
+    const content = md.slice(bodyStart, bodyEnd).replace(/\r?\n[ \t]*$/, '')
+    // block rỗng (``` ``` liền nhau) → bỏ, tránh sinh answer rỗng
+    if (content.trim()) blocks.push({ lang, content, closed: !!close })
+
+    openRe.lastIndex = close ? close.index + close[0].length : md.length
   }
   return blocks
 }

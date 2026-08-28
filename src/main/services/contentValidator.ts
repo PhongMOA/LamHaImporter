@@ -9,9 +9,18 @@ export interface ParsedSpecs {
 
 /** Dọn text TRƯỚC khi JSON.parse: gỡ marker citation ChatGPT (chứa [ ] { } phá JSON)
  *  + bỏ dấu phẩy thừa (trailing comma) GPT hay sót. KHÔNG đụng gạch ngang/khoảng trắng trong value. */
+/** Citation web dạng MỚI của ChatGPT: trên trang là chip nguồn bấm được, ra text thô thì trơ cú pháp
+ *  "citeturn719877search0turn719877search1" (nhiều nguồn nối liền, không dấu phân cách). */
+const CITE_TURN = /[ \t]*\bcite(?:turn\d+\w*)+/gi
+/** Mảnh tham chiếu lẻ còn sót khi marker bị đứt đôi: "turn413077view0", "turn0search3". */
+const TURN_REF =
+  /[ \t]*\bturn\d+(?:search|view|news|image|video|ref|file|forecast|navlist|product)\d+\b/gi
+
 function cleanJsonForParse(s: string): string {
   if (!s) return ''
   return s
+    .replace(CITE_TURN, '')
+    .replace(TURN_REF, '')
     .replace(/:contentReference\[oaicite:\d+\]\{index=\d+\}/gi, '')
     .replace(/\[oaicite:\d+\]/gi, '')
     .replace(/\{index=\d+\}/gi, '')
@@ -127,6 +136,8 @@ function extractJsonObjectLoose(text: string): string | null {
 export function stripCitations(text: string): string {
   if (!text) return text
   return text
+    .replace(CITE_TURN, '')
+    .replace(TURN_REF, '')
     .replace(/[ \t]*:contentReference\[oaicite:\d+\]\{index=\d+\}/gi, '')
     .replace(/[ \t]*\[oaicite:\d+\]/gi, '')
     .replace(/\{index=\d+\}/gi, '')

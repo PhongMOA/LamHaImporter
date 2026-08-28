@@ -96,9 +96,16 @@ export function buildDetailPrompt(
     '- KHÔNG in đậm trong tiêu đề <h2>/<h3> (đã nổi bật sẵn) và KHÔNG in đậm nội dung bên trong <table>.',
     ...imgRules,
     '',
-    'QUY TẮC ĐẦU RA (bắt buộc):',
+    'QUY TẮC ĐẦU RA (bắt buộc — hệ thống chỉ đọc phần BÊN TRONG khối mã, mọi chữ ngoài khối đều bị bỏ):',
     `- Trả về DUY NHẤT một khối mã \`\`\`html chứa HTML sạch (chỉ dùng <h2>, <h3>, <p>, <ul>, <li>, <strong>, <table>, <thead>, <tbody>, <tr>, <th>, <td>, và <a href> cho CTA)${outImgClause}.`,
-    '- KHÔNG kèm lời dẫn, KHÔNG markdown ngoài khối mã, KHÔNG inline style.',
+    '- Ký tự ĐẦU TIÊN của câu trả lời phải là ``` mở khối, đặt trên DÒNG RIÊNG: dòng đầu đúng là ```html,',
+    '  dòng cuối đúng là ``` đóng khối. KHÔNG viết bất kỳ chữ nào trước hoặc sau khối mã.',
+    '- TUYỆT ĐỐI KHÔNG viết lời dẫn/lời hứa kiểu "Tôi sẽ đối chiếu...", "Dưới đây là...", không tóm tắt,',
+    '  không ghi chú về nguồn đã tra cứu, không hỏi lại — chỉ có đúng một khối mã và không gì khác.',
+    '- KHÔNG chèn trích dẫn nguồn vào bài dưới mọi hình thức: không marker citation của trình duyệt/công cụ',
+    '  tìm kiếm (cite…, turn…search…, 【…†…】), không "(nguồn: …)", không chú thích tham khảo. Thông tin tra cứu',
+    '  được dùng để viết cho chính xác, nhưng bài đăng phải sạch, không dấu vết tra cứu.',
+    '- KHÔNG markdown ngoài khối mã, KHÔNG inline style.',
     '- Không bịa thông số kỹ thuật cụ thể; nội dung mang tính giới thiệu/marketing chính xác.'
   ].join('\n')
 }
@@ -152,6 +159,7 @@ export function buildSeoPrompt(draft: ProductDraft, includeTags = true): string 
       : '  {"meta_title":"...","meta_desc":"..."}',
     ...(includeTags ? [] : ['- KHÔNG thêm trường "tags" hay bất kỳ trường nào khác ngoài 2 trường trên.']),
     '- Tất cả nội dung bằng tiếng Việt; KHÔNG kèm lời dẫn, KHÔNG chú thích ngoài khối mã.',
+    '- KHÔNG chèn marker trích dẫn nguồn (cite…, turn…search…, 【…†…】) vào bất kỳ giá trị nào — chúng phá JSON.',
     '- KHÔNG bịa thông số kỹ thuật cụ thể trong meta_title/meta_desc.'
   ].join('\n')
 }
@@ -171,6 +179,7 @@ export function buildSpecPrompt(draft: ProductDraft): string {
     'QUY TẮC ĐẦU RA (bắt buộc):',
     '- Trả về DUY NHẤT một khối mã ```json chứa mảng JSON hợp lệ.',
     '- title và value đều là string tiếng Việt; KHÔNG kèm lời dẫn, KHÔNG chú thích ngoài khối mã.',
+    '- KHÔNG chèn marker trích dẫn nguồn (cite…, turn…search…, 【…†…】) vào bất kỳ giá trị nào — chúng phá JSON.',
     '- KHÔNG đưa các dòng: tên sản phẩm, model, mã hàng, xuất xứ, thương hiệu/hãng vào bảng (đã hiển thị ở nơi khác, tránh trùng lặp).',
     '- Chỉ liệt kê thông số kỹ thuật thực sự (điện áp, dòng định mức, công suất, số cực, tần số, tiếp điểm, tiêu chuẩn, kích thước...).',
     '- BẮT BUỘC có 2 dòng "Trọng lượng" và "Kích thước" (kích thước dạng Dài×Rộng×Cao kèm đơn vị mm). Nếu không chắc giá trị thực, dùng "Liên hệ".',

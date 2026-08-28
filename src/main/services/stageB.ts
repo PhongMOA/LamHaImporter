@@ -15,6 +15,7 @@ import { queueStore } from './queueStore'
 import { SiteClient } from './siteClient'
 import { configStore } from './config'
 import { embeddedBridge } from '../bridge/embeddedBridge'
+import { parseCodeBlocks } from '../bridge/extract'
 import { buildDetailPrompt, buildSpecPrompt, buildDetailImagePrompt, buildSeoPrompt } from '@shared/prompts'
 import {
   parseAttributes,
@@ -186,12 +187,19 @@ async function generateContent(
       newChat: true,
       extract: { type: 'code', lang: 'html' }
     })
+    // CHỈ lấy phần trong khối mã markdown. KHÔNG fallback về rawAnswer: câu trả lời thô còn
+    // kèm lời dẫn của GPT ("Tôi sẽ đối chiếu đúng mã ...") và marker trích dẫn web → lọt lên bài.
     let d = detailRes.answer
     if (!d || !validateDetail(d).ok) {
-      if (detailRes.rawAnswer && validateDetail(detailRes.rawAnswer).ok) d = detailRes.rawAnswer
+      // GPT quên ghi nhãn ngôn ngữ sau fence → vẫn nhận, miễn nội dung trong khối là HTML.
+      const html = parseCodeBlocks(detailRes.rawAnswer || '')
+        .map((b) => b.content)
+        .find((c) => /<(h[1-6]|p|div|table|ul)\b/i.test(c) && validateDetail(c).ok)
+      if (html) d = html
     }
     if (!validateDetail(d).ok) {
-      failures.push(`Mô tả rỗng/quá ngắn${detailRes.extractWarning ? ` (${detailRes.extractWarning})` : ''}`)
+      const why = detailRes.extractWarning || 'không tìm thấy khối ```html trong câu trả lời'
+      failures.push(`Mô tả rỗng/quá ngắn (${why})`)
     } else {
       rawDetail = sanitizeDetail(d) // sanitizeDetail GIỮ placeholder [[IMAGE]], chỉ bỏ <img> bịa
       conversationId = detailRes.conversationId || conversationId
