@@ -25,6 +25,7 @@ import {
   wrapJustify,
   styleTables,
   extractImagePlaceholders,
+  stripImagePlaceholders,
   replaceImagePlaceholder
 } from './contentValidator'
 import type { StageProgress, RunController } from './stageA'
@@ -179,6 +180,29 @@ async function generateContent(
   let images = safeParseImages(job.images_json)
   const failures: string[] = []
 
+  // ----- công tắc ảnh là QUYẾT ĐỊNH SAU CÙNG, kể cả với job đã có detail từ lượt trước -----
+  // Bước vẽ ảnh chạy theo placeholder [[IMAGE]] nằm trong detail, mà detail được checkpoint lại.
+  // Nên nếu chỉ đọc cấu hình lúc sinh detail thì bật/tắt KHÔNG có tác dụng với job đã sinh detail:
+  // tắt rồi chạy lại vẫn vẽ ảnh, bật rồi chạy lại vẫn không có ảnh. Đồng bộ lại ngay tại đây.
+  const wantImages = imageRequests.length
+  if (rawDetail && validateDetail(rawDetail).ok) {
+    const have = extractImagePlaceholders(rawDetail).length
+    if (!wantImages && have) {
+      // Tắt ảnh → gỡ placeholder khỏi bài đã viết + bỏ slot ảnh (ảnh đã upload trước đó thành mồ côi
+      // trên server, không đụng tới) → lượt đăng này bài sạch, không ảnh.
+      rawDetail = stripImagePlaceholders(rawDetail)
+      images = []
+      queueStore.markStageB(job.id, { detail: rawDetail, images_json: JSON.stringify(images) })
+      emit({ ...base, status: 'warn', message: '⚠ Đã tắt tạo ảnh — gỡ ảnh khỏi mô tả đã sinh trước đó' })
+    } else if (wantImages && !have) {
+      // Bật ảnh nhưng bài cũ không có chỗ đặt ảnh → viết lại mô tả để AI chèn đúng số placeholder.
+      rawDetail = ''
+      images = []
+      queueStore.markStageB(job.id, { detail: null, images_json: JSON.stringify(images) })
+      emit({ ...base, status: 'warn', message: '⚠ Đã bật tạo ảnh — viết lại mô tả để chèn ảnh' })
+    }
+  }
+
   // ===== Task 1: detail (HTML thô) =====
   ckCancel()
   if (!rawDetail || !validateDetail(rawDetail).ok) {
@@ -289,7 +313,8 @@ async function generateContent(
   // ===== Task 4: ảnh sơ đồ — CHẠY CUỐI; chỉ chạy khi đã có detail; mỗi placeholder = 1 ảnh =====
   // Để cuối vì ảnh là task chậm/dễ timeout nhất: các task text (mô tả/thông số/SEO) đã chốt xong
   // trước → ảnh lỗi thì job 'error' nhưng text vẫn được giữ, "chạy lại" chỉ làm nốt ảnh.
-  if (detailOk) {
+  // Tắt tạo ảnh → BỎ HẲN task này, dù GPT có tự ý chèn placeholder (upsert sẽ gỡ placeholder sót).
+  if (detailOk && wantImages) {
     const descs = extractImagePlaceholders(rawDetail)
     // đồng bộ slot theo placeholder hiện tại, GIỮ url đã có (theo index) để không vẽ lại ảnh đã xong
     images = descs.map((desc, i) => ({ desc, url: images[i]?.url ?? null }))
@@ -354,7 +379,7 @@ async function generateContent(
 
   // ===== Chốt: đủ cả TEXT (mô tả + thông số + SEO) VÀ ẢNH (mọi placeholder có ảnh) mới đăng =====
   // Ảnh là RÀNG BUỘC: nếu có placeholder mà chưa tạo/upload được đủ → KHÔNG đăng (job 'error').
-  const totalImgs = detailOk ? extractImagePlaceholders(rawDetail).length : 0
+  const totalImgs = detailOk && wantImages ? extractImagePlaceholders(rawDetail).length : 0
   const okImgs = images.filter((s) => !!s?.url).length
   const imagesOk = detailOk && okImgs >= totalImgs
   const contentOk = detailOk && attributes.length > 0 && isSeoComplete(seoJson, seoTagEnabled) && imagesOk
@@ -388,7 +413,7 @@ async function upsertContent(job: JobRow, client: SiteClient, emit: (p: StagePro
     detail = replaceImagePlaceholder(detail, tag)
   }
   detail = sanitizeDetail(detail) // dọn <img> bịa + gỡ placeholder sót (nếu có) qua bước kế
-  detail = detail.replace(/<p>\s*\[\[IMAGE:[\s\S]*?\]\]\s*<\/p>/gi, '').replace(/\[\[IMAGE:[\s\S]*?\]\]/gi, '')
+  detail = stripImagePlaceholders(detail) // placeholder chưa có ảnh (hoặc đã tắt tạo ảnh) → gỡ sạch
   detail = styleTables(detail) // ép border cho bảng thông số (GPT xuất bảng không kèm style)
   detail = wrapJustify(detail) // canh đều (justify) toàn bộ mô tả
   const attributes: Attribute[] = safeParseAttributes(job.attributes_json)

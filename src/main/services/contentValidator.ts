@@ -213,6 +213,15 @@ export function replaceImagePlaceholder(html: string, replacement: string): stri
   return html.replace(IMG_PLACEHOLDER, replacement)
 }
 
+/** Gỡ SẠCH mọi placeholder ảnh còn sót khỏi bài (kể cả vỏ <p> bao quanh) — dùng khi tắt tạo ảnh
+ *  hoặc khi ảnh không tạo được: nếu không gỡ, chuỗi "[[IMAGE: ...]]" hiện nguyên văn trên web. */
+export function stripImagePlaceholders(html: string): string {
+  if (typeof html !== 'string' || !html) return html || ''
+  return html
+    .replace(/<p>\s*\[\[IMAGE:[\s\S]*?\]\]\s*<\/p>/gi, '')
+    .replace(/\[\[IMAGE:[\s\S]*?\]\]/gi, '')
+}
+
 /** Gỡ vỏ markdown lẫn trong HTML khi GPT bọc bài bằng code fence (```html ... ```) hoặc
  *  in nhãn ngôn ngữ "HTML" trơ ở đầu — nếu không gỡ, chữ "HTML"/dấu ``` lọt vào bài đăng.
  *  - Xoá MỌI dòng chỉ chứa fence markdown (```lang / ``` / ~~~ ...), kể cả fence mở lẫn đóng.
