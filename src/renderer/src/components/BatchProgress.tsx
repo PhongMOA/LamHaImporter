@@ -149,13 +149,18 @@ export function BatchProgress({ runId }: { runId: string }): React.ReactElement 
           locale={{ emptyText: 'Chưa có sự kiện' }}
           renderItem={(e) => (
             <List.Item style={{ paddingInline: 12 }}>
-              <Space size={8}>
+              <Space size={8} wrap>
                 <Tag color="default">#{e.rowIndex}</Tag>
                 <Tag color={e.phase === 'A' ? 'blue' : 'purple'}>{e.phase}</Tag>
                 <Tag color={STATUS_COLOR[e.status] || 'default'}>{e.status}</Tag>
                 <Typography.Text style={{ fontSize: 12 }}>{e.title}</Typography.Text>
                 {e.message && (
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  // Lỗi kèm file chẩn đoán (ảnh chụp tab...) → cho copy nguyên dòng để mở file.
+                  <Typography.Text
+                    type="secondary"
+                    style={{ fontSize: 12, wordBreak: 'break-all' }}
+                    copyable={e.message.includes('Ảnh chụp:') || e.message.includes('Chẩn đoán:')}
+                  >
                     — {e.message}
                   </Typography.Text>
                 )}

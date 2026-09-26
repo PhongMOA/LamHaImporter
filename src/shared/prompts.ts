@@ -1,6 +1,18 @@
 // prompts.ts — builder prompt cho GPT (Pha B). Dùng chung để dễ test/chỉnh.
 
-import type { ProductDraft } from './types'
+import type { AppConfig, ProductDraft } from './types'
+
+/** Các yêu cầu ảnh THỰC SỰ dùng khi viết bài: công tắc tổng bật + từng ô bật + nội dung không rỗng. */
+export function activeImageRequests(
+  cfg: Pick<AppConfig, 'detailImageEnabled' | 'detailImageRequests' | 'detailImageRequestEnabled'>
+): string[] {
+  if (cfg.detailImageEnabled === false) return []
+  const flags = cfg.detailImageRequestEnabled || []
+  return (cfg.detailImageRequests || [])
+    .filter((_, i) => flags[i] !== false)
+    .map((s) => (s || '').trim())
+    .filter(Boolean)
+}
 
 /** Prompt sinh mô tả chi tiết (HTML). Yêu cầu bọc ```html để extract sạch.
  *  `site` (tên + URL website của mình) để CTA "nơi mua hàng" trỏ ĐÚNG về web mình, không chung chung.

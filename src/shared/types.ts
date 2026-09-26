@@ -111,6 +111,9 @@ export interface AppConfig {
   // cho mọi bài: được đính vào prompt VIẾT BÀI để AI tự sinh mô tả [[IMAGE: ...]] theo đúng vị trí +
   // yêu cầu (KHÔNG dùng trực tiếp trong prompt tạo ảnh). Phần tử rỗng → bỏ qua ảnh đó.
   detailImageRequests: string[]
+  // Bật/tắt RIÊNG từng yêu cầu ảnh, song song theo chỉ số với detailImageRequests. Thiếu phần tử
+  // (config cũ) → coi là bật. Tắt 1 ô vẫn giữ nguyên nội dung ô đó để bật lại khỏi gõ lại.
+  detailImageRequestEnabled?: boolean[]
   // Thời gian chờ tối đa (giây) cho MỖI ảnh trước khi báo fail (timeout). Truyền xuống extension
   // làm trần render ảnh DALL-E. Mặc định 300s. Tối thiểu 60s.
   detailImageTimeoutSec: number

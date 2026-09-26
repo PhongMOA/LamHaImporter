@@ -16,7 +16,13 @@ import { SiteClient } from './siteClient'
 import { configStore } from './config'
 import { embeddedBridge } from '../bridge/embeddedBridge'
 import { parseCodeBlocks } from '../bridge/extract'
-import { buildDetailPrompt, buildSpecPrompt, buildDetailImagePrompt, buildSeoPrompt } from '@shared/prompts'
+import {
+  buildDetailPrompt,
+  buildSpecPrompt,
+  buildDetailImagePrompt,
+  buildSeoPrompt,
+  activeImageRequests
+} from '@shared/prompts'
 import {
   parseAttributes,
   parseSeo,
@@ -160,8 +166,9 @@ async function generateContent(
   const cfg = configStore.get()
   const site = configStore.getSite(job.site_id)
   const sitePromptInfo = { name: site?.label, url: site?.baseUrl }
-  // Tắt cấu hình tạo ảnh → không truyền yêu cầu ảnh → prompt không chèn placeholder, Pha B không vẽ ảnh.
-  const imageRequests = cfg.detailImageEnabled === false ? [] : cfg.detailImageRequests || []
+  // Chỉ lấy yêu cầu ảnh đang BẬT (công tắc tổng + từng ô). Không còn ô nào → prompt không chèn
+  // placeholder, Pha B không vẽ ảnh.
+  const imageRequests = activeImageRequests(cfg)
   // Tắt cấu hình tạo tag → prompt SEO không xin tags, thiếu tag không tính là lỗi, đăng không gửi tag.
   const seoTagEnabled = cfg.seoTagEnabled !== false
 
@@ -194,12 +201,19 @@ async function generateContent(
       images = []
       queueStore.markStageB(job.id, { detail: rawDetail, images_json: JSON.stringify(images) })
       emit({ ...base, status: 'warn', message: '⚠ Đã tắt tạo ảnh — gỡ ảnh khỏi mô tả đã sinh trước đó' })
-    } else if (wantImages && !have) {
-      // Bật ảnh nhưng bài cũ không có chỗ đặt ảnh → viết lại mô tả để AI chèn đúng số placeholder.
+    } else if (wantImages && have !== wantImages) {
+      // Bật ảnh nhưng bài cũ không có chỗ đặt ảnh, hoặc bật/tắt riêng từng yêu cầu làm số ảnh
+      // lệch với bài cũ → viết lại mô tả để AI chèn đúng số placeholder theo các yêu cầu đang bật.
       rawDetail = ''
       images = []
       queueStore.markStageB(job.id, { detail: null, images_json: JSON.stringify(images) })
-      emit({ ...base, status: 'warn', message: '⚠ Đã bật tạo ảnh — viết lại mô tả để chèn ảnh' })
+      emit({
+        ...base,
+        status: 'warn',
+        message: have
+          ? `⚠ Số ảnh yêu cầu đổi (${have} → ${wantImages}) — viết lại mô tả để chèn đúng ảnh`
+          : '⚠ Đã bật tạo ảnh — viết lại mô tả để chèn ảnh'
+      })
     }
   }
 

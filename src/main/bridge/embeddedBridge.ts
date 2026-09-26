@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { WebSocketServer, WebSocket } from 'ws'
 import { applyExtract } from './extract'
+import { saveExtensionDiagnostics } from '../services/diagnostics'
 import type { AskResult, BridgeHealth, ExtractRule } from '@shared/types'
 
 type JobStatus = 'queued' | 'running' | 'done' | 'error' | 'timeout'
@@ -47,6 +48,8 @@ interface ExtMessage {
   conversationId?: string
   images?: string[]
   message?: string
+  diag?: unknown // chẩn đoán DOM khi extension lỗi (vd không thấy ô nhập)
+  screenshot?: string | null // ảnh chụp tab ChatGPT lúc lỗi (dataURL JPEG)
 }
 
 export class EmbeddedBridge extends EventEmitter {
@@ -352,7 +355,18 @@ export class EmbeddedBridge extends EventEmitter {
         if (msg.jobId) this.markDone(msg.jobId, msg)
         break
       case 'error':
-        if (msg.jobId) this.markError(msg.jobId, msg.message || 'extension error')
+        if (msg.jobId) {
+          let message = msg.message || 'extension error'
+          if (msg.diag || msg.screenshot) {
+            // Lưu file chẩn đoán + ghi đường dẫn thẳng vào lỗi → hiện ở Nhật ký để mở ra xem.
+            const saved = saveExtensionDiagnostics(msg.jobId, msg.diag, msg.screenshot)
+            if (saved.screenshot) message += ` | Ảnh chụp: ${saved.screenshot}`
+            else message += ' | (không chụp được ảnh tab)'
+            if (saved.json) message += ` | Chẩn đoán: ${saved.json}`
+            console.warn('[bridge] lỗi extension kèm chẩn đoán:', message)
+          }
+          this.markError(msg.jobId, message)
+        }
         break
     }
   }

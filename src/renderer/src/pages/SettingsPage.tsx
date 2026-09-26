@@ -49,6 +49,8 @@ export function SettingsPage(): React.ReactElement {
         enabled: config.detailImageEnabled !== false,
         req1: config.detailImageRequests?.[0] ?? '',
         req2: config.detailImageRequests?.[1] ?? '',
+        req1On: config.detailImageRequestEnabled?.[0] !== false,
+        req2On: config.detailImageRequestEnabled?.[1] !== false,
         timeoutSec: config.detailImageTimeoutSec ?? 300
       })
     }
@@ -70,10 +72,17 @@ export function SettingsPage(): React.ReactElement {
 
   const saveImgReq = async (): Promise<void> => {
     const v = await imgReqForm.validateFields()
-    // Bỏ phần tử rỗng để Pha B chỉ tạo đúng số ảnh được yêu cầu.
-    const detailImageRequests = [v.req1, v.req2].map((s: string) => (s || '').trim()).filter(Boolean)
+    // Giữ ĐÚNG vị trí từng ô (kể cả ô rỗng/đang tắt) để công tắc khớp chỉ số với nội dung;
+    // Pha B tự bỏ ô rỗng/tắt qua activeImageRequests().
+    const detailImageRequests = [v.req1, v.req2].map((s: string) => (s || '').trim())
+    const detailImageRequestEnabled = [v.req1On !== false, v.req2On !== false]
     const detailImageTimeoutSec = Math.max(60, Math.round(Number(v.timeoutSec) || 300))
-    await saveConfig({ detailImageEnabled: !!v.enabled, detailImageRequests, detailImageTimeoutSec })
+    await saveConfig({
+      detailImageEnabled: !!v.enabled,
+      detailImageRequests,
+      detailImageRequestEnabled,
+      detailImageTimeoutSec
+    })
     message.success('Đã lưu cấu hình tạo ảnh nội dung.')
   }
 
@@ -252,33 +261,46 @@ export function SettingsPage(): React.ReactElement {
           <Form.Item name="enabled" label="Bật tạo ảnh nội dung" valuePropName="checked">
             <Switch />
           </Form.Item>
-          <Form.Item noStyle shouldUpdate={(p, c) => p.enabled !== c.enabled}>
+          <Form.Item
+            noStyle
+            shouldUpdate={(p, c) =>
+              p.enabled !== c.enabled || p.req1On !== c.req1On || p.req2On !== c.req2On
+            }
+          >
             {({ getFieldValue }) => {
               const on = !!getFieldValue('enabled')
+              // Mỗi yêu cầu có công tắc riêng (nằm cạnh nhãn); tắt → ô xám lại nhưng giữ nội dung.
+              const reqItem = (idx: 1 | 2, tooltip: string, placeholder: string): React.ReactElement => {
+                const itemOn = getFieldValue(`req${idx}On`) !== false
+                return (
+                  <Form.Item
+                    name={`req${idx}`}
+                    tooltip={tooltip}
+                    label={
+                      <Space size={8}>
+                        <span>Yêu cầu ảnh {idx}</span>
+                        <Form.Item name={`req${idx}On`} valuePropName="checked" noStyle>
+                          <Switch size="small" disabled={!on} />
+                        </Form.Item>
+                      </Space>
+                    }
+                  >
+                    <Input.TextArea rows={3} disabled={!on || !itemOn} placeholder={placeholder} />
+                  </Form.Item>
+                )
+              }
               return (
                 <>
-                  <Form.Item
-                    name="req1"
-                    label="Yêu cầu ảnh 1"
-                    tooltip="Yêu cầu chung cho ảnh thứ nhất trong mọi bài. Để trống nếu không cần ảnh này."
-                  >
-                    <Input.TextArea
-                      rows={3}
-                      disabled={!on}
-                      placeholder="VD: Sơ đồ đấu dây / kết nối của sản phẩm: thể hiện các cực đấu nối, nguồn cấp, tải và thiết bị bảo vệ liên quan."
-                    />
-                  </Form.Item>
-                  <Form.Item
-                    name="req2"
-                    label="Yêu cầu ảnh 2"
-                    tooltip="Yêu cầu chung cho ảnh thứ hai trong mọi bài. Để trống nếu không cần ảnh này."
-                  >
-                    <Input.TextArea
-                      rows={3}
-                      disabled={!on}
-                      placeholder="VD: Sơ đồ nguyên lý hoạt động của sản phẩm: thể hiện các khối chức năng chính và luồng hoạt động."
-                    />
-                  </Form.Item>
+                  {reqItem(
+                    1,
+                    'Yêu cầu chung cho ảnh thứ nhất trong mọi bài. Tắt công tắc hoặc để trống nếu không cần ảnh này.',
+                    'VD: Sơ đồ đấu dây / kết nối của sản phẩm: thể hiện các cực đấu nối, nguồn cấp, tải và thiết bị bảo vệ liên quan.'
+                  )}
+                  {reqItem(
+                    2,
+                    'Yêu cầu chung cho ảnh thứ hai trong mọi bài. Tắt công tắc hoặc để trống nếu không cần ảnh này.',
+                    'VD: Sơ đồ nguyên lý hoạt động của sản phẩm: thể hiện các khối chức năng chính và luồng hoạt động.'
+                  )}
                   <Form.Item
                     name="timeoutSec"
                     label="Thời gian chờ mỗi ảnh trước khi báo lỗi (giây)"
@@ -304,7 +326,7 @@ export function SettingsPage(): React.ReactElement {
         <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0, fontSize: 13 }}>
           Đây là <b>yêu cầu chung</b> được đính kèm vào prompt <b>viết bài</b>: AI sẽ tự sinh phần mô tả
           ảnh (<span className="mono">[[IMAGE: …]]</span>) đúng vị trí trong bài và cụ thể hoá theo từng
-          sản phẩm — KHÔNG dùng nguyên văn ô này làm prompt vẽ ảnh. Mỗi ô tương ứng một ảnh; để trống một
+          sản phẩm — KHÔNG dùng nguyên văn ô này làm prompt vẽ ảnh. Mỗi ô tương ứng một ảnh; tắt công tắc hoặc để trống một
           ô thì bài chỉ có một ảnh.
         </Typography.Paragraph>
       </Card>

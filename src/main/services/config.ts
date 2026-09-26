@@ -24,6 +24,7 @@ function defaultConfig(): AppConfig {
       'Sơ đồ đấu dây / kết nối của sản phẩm: thể hiện rõ các cực đấu nối, nguồn cấp, tải và thiết bị bảo vệ liên quan.',
       'Sơ đồ nguyên lý hoạt động của sản phẩm: thể hiện các khối chức năng chính và luồng hoạt động giữa chúng.'
     ],
+    detailImageRequestEnabled: [true, true],
     detailImageTimeoutSec: 300,
     taxMap: {}
   }
