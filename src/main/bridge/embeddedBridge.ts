@@ -30,6 +30,7 @@ interface InternalJob {
   extractWarning: string | null
   images: string[]
   error: string | null
+  diagPending?: boolean // đang chờ extension chụp chẩn đoán trước khi settle
 }
 
 export interface BridgeStartOpts {
@@ -41,8 +42,9 @@ export interface BridgeStartOpts {
 
 /** Message extension → server. */
 interface ExtMessage {
-  type: 'ready' | 'delta' | 'done' | 'error' | 'pong'
+  type: 'ready' | 'delta' | 'done' | 'error' | 'pong' | 'diagResult'
   jobId?: string
+  reqId?: string // diagResult: khớp yêu cầu requestDiag()
   text?: string
   answer?: string
   conversationId?: string
@@ -64,6 +66,7 @@ export class EmbeddedBridge extends EventEmitter {
   private inFlightTimer: NodeJS.Timeout | null = null
 
   private opts: BridgeStartOpts | null = null
+  private diagWaiters = new Map<string, (msg: ExtMessage | null) => void>()
   private starting = false
 
   // --------------------------------------------------------------- lifecycle
@@ -347,7 +350,7 @@ export class EmbeddedBridge extends EventEmitter {
           j.rawAnswer += msg.text || ''
           j.answer += msg.text || ''
           if (msg.conversationId) j.conversationId = msg.conversationId // bắt sớm để job cứu (idle-timeout) vẫn chain được
-          if (this.inFlightId === j.id) this.armIdleTimer(j) // có hoạt động → gia hạn idle, né timeout oan
+          if (this.inFlightId === j.id && !j.diagPending) this.armIdleTimer(j) // có hoạt động → gia hạn idle, né timeout oan
         }
         break
       }
@@ -368,7 +371,47 @@ export class EmbeddedBridge extends EventEmitter {
           this.markError(msg.jobId, message)
         }
         break
+      case 'diagResult': {
+        const w = msg.reqId ? this.diagWaiters.get(msg.reqId) : undefined
+        if (w) w(msg)
+        break
+      }
     }
+  }
+
+  /** Nhờ extension chụp tab + dump DOM (khi câu trả lời hỏng/timeout) → lưu vào thư mục diagnostics.
+   *  Trả về đoạn đuôi " | Ảnh chụp: ... | Chẩn đoán: ..." để nối vào lỗi/cảnh báo; '' nếu không lấy được. */
+  private async captureDiagSuffix(jobId: string, timeoutMs = 12_000): Promise<string> {
+    const reqId = randomUUID()
+    const msg = await new Promise<ExtMessage | null>((resolve) => {
+      const done = (m: ExtMessage | null): void => {
+        clearTimeout(timer)
+        this.diagWaiters.delete(reqId)
+        resolve(m)
+      }
+      const timer = setTimeout(() => done(null), timeoutMs)
+      this.diagWaiters.set(reqId, done)
+      if (!this.send({ type: 'diag', reqId })) done(null)
+    })
+    if (!msg || (!msg.diag && !msg.screenshot)) return ''
+    const saved = saveExtensionDiagnostics(jobId, msg.diag, msg.screenshot)
+    let s = saved.screenshot ? ` | Ảnh chụp: ${saved.screenshot}` : ' | (không chụp được ảnh tab)'
+    if (saved.json) s += ` | Chẩn đoán: ${saved.json}`
+    return s
+  }
+
+  /** Như settle() nhưng chụp chẩn đoán trước (tối đa ~12s). Job vẫn giữ inFlight trong lúc chờ
+   *  → tab ChatGPT chưa bị job kế tiếp đè lên, ảnh chụp đúng trạng thái lỗi. */
+  private settleWithDiag(job: InternalJob, status: JobStatus, apply: (suffix: string) => void): void {
+    this.clearInFlightTimer()
+    job.diagPending = true
+    void this.captureDiagSuffix(job.id)
+      .catch(() => '')
+      .then((suffix) => {
+        job.diagPending = false
+        apply(suffix)
+        this.settle(job, status)
+      })
   }
 
   private send(obj: unknown): boolean {
@@ -383,13 +426,20 @@ export class EmbeddedBridge extends EventEmitter {
 
   private markDone(id: string, msg: ExtMessage): void {
     const job = this.jobs.get(id)
-    if (!job) return
+    if (!job || job.diagPending) return
     if (typeof msg.answer === 'string' && msg.answer.length) job.rawAnswer = msg.answer
     const { answer, warning } = applyExtract(job.rawAnswer, job.extract)
     job.answer = answer
     job.extractWarning = warning
     if (msg.conversationId) job.conversationId = msg.conversationId
     if (Array.isArray(msg.images) && msg.images.length) job.images = msg.images
+    if (job.extract && warning) {
+      // Câu trả lời rỗng/thiếu khối mã → chụp tab + HTML để biết extension đọc sai chỗ nào.
+      this.settleWithDiag(job, 'done', (s) => {
+        job.extractWarning = warning + s
+      })
+      return
+    }
     this.settle(job, 'done')
   }
 
@@ -402,7 +452,7 @@ export class EmbeddedBridge extends EventEmitter {
 
   private markTimeout(id: string): void {
     const job = this.jobs.get(id)
-    if (!job) return
+    if (!job || job.diagPending) return
     // Cứu nội dung khi idle-timeout: GPT có thể đã trả lời XONG nhưng extension không gửi 'done'
     // (đổi UI ChatGPT / chế độ "suy nghĩ") → im lặng đủ lâu thành timeout OAN, vứt mất bài đã nhận.
     // Chỉ cứu job trích khối mã: nếu buffer đã chứa ĐỦ khối mã ĐÓNG (applyExtract ra nội dung,
@@ -416,8 +466,9 @@ export class EmbeddedBridge extends EventEmitter {
         return
       }
     }
-    job.error = 'timeout'
-    this.settle(job, 'timeout')
+    this.settleWithDiag(job, 'timeout', (s) => {
+      job.error = 'timeout' + s
+    })
   }
 
   private settle(job: InternalJob, status: JobStatus): void {
