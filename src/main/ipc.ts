@@ -64,6 +64,7 @@ export function registerIpc(): void {
 
   // ---------------------------------------------------------------- bridge
   ipcMain.handle(IPC.bridgeHealth, () => embeddedBridge.health())
+  ipcMain.handle(IPC.bridgeListModels, () => embeddedBridge.listModels())
   ipcMain.handle(
     IPC.bridgeAsk,
     (_e, prompt: string, opts?: { newChat?: boolean; conversationId?: string; timeoutMs?: number; extract?: ExtractRule }) =>

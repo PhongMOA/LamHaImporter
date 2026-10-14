@@ -13,11 +13,32 @@ import {
   Typography,
   App as AntdApp,
   Divider,
-  Popconfirm
+  Popconfirm,
+  AutoComplete
 } from 'antd'
-import { PlusOutlined, DeleteOutlined, ApiOutlined, EditOutlined, CloudSyncOutlined } from '@ant-design/icons'
+import {
+  PlusOutlined,
+  DeleteOutlined,
+  ApiOutlined,
+  EditOutlined,
+  CloudSyncOutlined,
+  ReloadOutlined
+} from '@ant-design/icons'
 import type { SiteTarget } from '@shared/types'
 import { useStore } from '../store'
+
+// Mức suy luận trong menu model ChatGPT (giá trị data-reasoning-effort → nhãn UI tiếng Việt).
+const EFFORT_OPTIONS = [
+  { value: 'none', label: 'Không suy luận' },
+  { value: 'minimal', label: 'Nhanh' },
+  { value: 'low', label: 'Nhẹ nhàng' },
+  { value: 'medium', label: 'Vừa' },
+  { value: 'high', label: 'Cao' },
+  { value: 'xhigh', label: 'Chuyên sâu' },
+  { value: 'max', label: 'Tối đa' },
+  { value: 'ultra', label: 'Cực cao' },
+  { value: 'persistent', label: 'Liên tục' }
+]
 
 export function SettingsPage(): React.ReactElement {
   const { config, saveConfig, reloadConfig } = useStore()
@@ -26,9 +47,13 @@ export function SettingsPage(): React.ReactElement {
   const [siteForm] = Form.useForm()
   const [imageForm] = Form.useForm()
   const [imgReqForm] = Form.useForm()
+  const seoEnabledWatch = Form.useWatch('seoEnabled', bridgeForm)
   const [pinging, setPinging] = useState<string | null>(null)
   const [version, setVersion] = useState('')
   const [checking, setChecking] = useState(false)
+  const [models, setModels] = useState<string[]>([])
+  const [efforts, setEfforts] = useState(EFFORT_OPTIONS)
+  const [loadingModels, setLoadingModels] = useState(false)
 
   useEffect(() => {
     window.api.app.getVersion().then(setVersion).catch(() => {})
@@ -42,7 +67,10 @@ export function SettingsPage(): React.ReactElement {
         bridgeToken: config.bridgeToken,
         throttleMs: config.throttleMs,
         autoCreateSpecGroup: config.autoCreateSpecGroup,
-        seoTagEnabled: config.seoTagEnabled !== false
+        seoEnabled: config.seoEnabled !== false,
+        seoTagEnabled: config.seoTagEnabled !== false,
+        gptModel: config.gptModel || '',
+        gptEffort: config.gptEffort || ''
       })
       imageForm.setFieldsValue(config.imageProcess)
       imgReqForm.setFieldsValue({
@@ -62,6 +90,23 @@ export function SettingsPage(): React.ReactElement {
     const v = await bridgeForm.validateFields()
     await saveConfig(v)
     message.success('Đã lưu cấu hình. Khởi động lại app nếu đổi host/port hub.')
+  }
+
+  const loadModels = async (): Promise<void> => {
+    setLoadingModels(true)
+    try {
+      const r = await window.api.bridge.listModels()
+      setModels(r.models)
+      if (r.efforts.length) setEfforts(r.efforts)
+      if (!bridgeForm.getFieldValue('gptModel') && r.current) bridgeForm.setFieldValue('gptModel', r.current)
+      message.success(
+        `Lấy được ${r.models.length} model` + (r.current ? ` (đang dùng: ${r.current})` : '') + '.'
+      )
+    } catch (e) {
+      message.error(`Không lấy được danh sách model: ${(e as Error).message}`)
+    } finally {
+      setLoadingModels(false)
+    }
   }
 
   const saveImage = async (): Promise<void> => {
@@ -204,12 +249,49 @@ export function SettingsPage(): React.ReactElement {
               <Switch />
             </Form.Item>
             <Form.Item
+              name="seoEnabled"
+              label="Tạo SEO bằng AI"
+              valuePropName="checked"
+              tooltip="Tắt thì bỏ qua bước sinh SEO (tiêu đề, mô tả, tag): thiếu SEO không tính là lỗi, lúc đăng chỉ dùng cột Tiêu đề / Mô tả nhập trong Excel (nếu có). Bật thì ô Excel có giá trị vẫn được ưu tiên, AI chỉ bù ô trống."
+            >
+              <Switch />
+            </Form.Item>
+            <Form.Item
               name="seoTagEnabled"
               label="Tạo tag SEO cho sản phẩm"
               valuePropName="checked"
               tooltip="Tắt thì bỏ hẳn bước tạo tag: prompt SEO không xin tags, thiếu tag không tính là lỗi, và lúc đăng không gửi tag lên site. Tiêu đề & mô tả SEO vẫn chạy bình thường."
             >
-              <Switch />
+              <Switch disabled={seoEnabledWatch === false} />
+            </Form.Item>
+          </Space>
+          <Space size={16} wrap align="end">
+            <Form.Item
+              name="gptModel"
+              label="Model ChatGPT"
+              tooltip="Mỗi khi mở khung chat mới, extension tự chọn model này trong menu chọn model của ChatGPT. Để trống = giữ model mặc định của ChatGPT. Bấm nút bên cạnh để lấy danh sách từ tab ChatGPT đang mở."
+              normalize={(v) => (v || '').trim()}
+            >
+              <AutoComplete
+                allowClear
+                style={{ width: 280 }}
+                placeholder="Mặc định của ChatGPT"
+                options={models.map((m) => ({ value: m }))}
+                filterOption={(input, opt) =>
+                  String(opt?.value || '').toLowerCase().includes(input.toLowerCase())
+                }
+              />
+            </Form.Item>
+            <Form.Item name="gptEffort" label="Mức suy luận">
+              <Select
+                style={{ width: 180 }}
+                options={[{ value: '', label: 'Mặc định' }, ...efforts]}
+              />
+            </Form.Item>
+            <Form.Item>
+              <Button icon={<ReloadOutlined />} loading={loadingModels} onClick={loadModels}>
+                Lấy danh sách từ ChatGPT
+              </Button>
             </Form.Item>
           </Space>
           <Button type="primary" onClick={saveBridge}>

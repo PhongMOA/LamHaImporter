@@ -22,8 +22,11 @@ export type ColKey =
   | 'alsoBuy'
   | 'specInstruction'
   | 'filterSpec'
+  | 'seoTitle'
+  | 'seoDesc'
 
-/** Header Excel (chuẩn hoá lowercase, bỏ dấu) → ColKey. Vị trí cột là fallback. */
+/** Header Excel (chuẩn hoá lowercase, bỏ dấu) → ColKey. Vị trí cột là fallback.
+ *  col = -1 → cột TÙY CHỌN, chỉ nhận theo header (không có header = không dùng). */
 export const HEADER_MAP: Record<ColKey, { labels: string[]; col: number }> = {
   title: { labels: ['ten san pham'], col: 0 },
   detailInstruction: { labels: ['chi tiet san pham'], col: 1 },
@@ -41,7 +44,10 @@ export const HEADER_MAP: Record<ColKey, { labels: string[]; col: number }> = {
   price: { labels: ['gia san pham', 'gia'], col: 13 },
   alsoBuy: { labels: ['san pham mua cung'], col: 14 },
   specInstruction: { labels: ['thong so ky thuat'], col: 15 },
-  filterSpec: { labels: ['thuoc tinh loc', 'bo loc'], col: 16 }
+  filterSpec: { labels: ['thuoc tinh loc', 'bo loc'], col: 16 },
+  // SEO Meta nhập tay (có thể bỏ trống) — ô có giá trị thì dùng thay cho AI.
+  seoTitle: { labels: ['tieu de seo', 'tieu de', 'meta title', 'seo title'], col: -1 },
+  seoDesc: { labels: ['mo ta seo', 'mo ta', 'meta description', 'meta desc', 'seo description'], col: -1 }
 }
 
 /** Bỏ dấu tiếng Việt + lowercase + trim để so khớp header. */
@@ -55,15 +61,22 @@ export function normalizeHeader(s: unknown): string {
     .trim()
 }
 
-/** Định vị cột theo header (ưu tiên), fallback vị trí cứng. */
+/** Định vị cột theo header (ưu tiên khớp đúng, rồi mới khớp chứa), fallback vị trí cứng.
+ *  File CÓ dòng header (khớp >= 3 cột) → cột thiếu header là -1, KHÔNG fallback vị trí: chèn thêm
+ *  cột (vd "Tiêu đề", "Mô tả" sau "Tên Sản phẩm") làm lệch vị trí, fallback sẽ đọc nhầm cột. */
 export function buildColIndex(headerRow: unknown[]): Record<ColKey, number> {
   const normalized = headerRow.map(normalizeHeader)
+  const found = {} as Record<ColKey, number>
+  for (const key of Object.keys(HEADER_MAP) as ColKey[]) {
+    const { labels } = HEADER_MAP[key]
+    let idx = normalized.findIndex((h) => labels.includes(h))
+    if (idx < 0) idx = normalized.findIndex((h) => labels.some((l) => h.includes(l)))
+    found[key] = idx
+  }
+  const hasHeader = Object.values(found).filter((i) => i >= 0).length >= 3
   const out = {} as Record<ColKey, number>
   for (const key of Object.keys(HEADER_MAP) as ColKey[]) {
-    const { labels, col } = HEADER_MAP[key]
-    let idx = normalized.findIndex((h) => labels.some((l) => h === l || h.includes(l)))
-    if (idx < 0) idx = col
-    out[key] = idx
+    out[key] = found[key] >= 0 || hasHeader ? found[key] : HEADER_MAP[key].col
   }
   return out
 }

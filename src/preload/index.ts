@@ -24,7 +24,8 @@ const api: Api = {
   },
   bridge: {
     health: () => ipcRenderer.invoke(IPC.bridgeHealth),
-    ask: (prompt, opts) => ipcRenderer.invoke(IPC.bridgeAsk, prompt, opts)
+    ask: (prompt, opts) => ipcRenderer.invoke(IPC.bridgeAsk, prompt, opts),
+    listModels: () => ipcRenderer.invoke(IPC.bridgeListModels)
   },
   site: {
     ping: (siteId) => ipcRenderer.invoke(IPC.sitePing, siteId)

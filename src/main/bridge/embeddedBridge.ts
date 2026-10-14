@@ -12,7 +12,8 @@ import { EventEmitter } from 'node:events'
 import { WebSocketServer, WebSocket } from 'ws'
 import { applyExtract } from './extract'
 import { saveExtensionDiagnostics } from '../services/diagnostics'
-import type { AskResult, BridgeHealth, ExtractRule } from '@shared/types'
+import { configStore } from '../services/config'
+import type { AskResult, BridgeHealth, ExtractRule, GptModelList } from '@shared/types'
 
 type JobStatus = 'queued' | 'running' | 'done' | 'error' | 'timeout'
 
@@ -42,7 +43,7 @@ export interface BridgeStartOpts {
 
 /** Message extension → server. */
 interface ExtMessage {
-  type: 'ready' | 'delta' | 'done' | 'error' | 'pong' | 'diagResult'
+  type: 'ready' | 'delta' | 'done' | 'error' | 'pong' | 'diagResult' | 'modelsResult'
   jobId?: string
   reqId?: string // diagResult: khớp yêu cầu requestDiag()
   text?: string
@@ -52,6 +53,8 @@ interface ExtMessage {
   message?: string
   diag?: unknown // chẩn đoán DOM khi extension lỗi (vd không thấy ô nhập)
   screenshot?: string | null // ảnh chụp tab ChatGPT lúc lỗi (dataURL JPEG)
+  data?: GptModelList // modelsResult
+  error?: string
 }
 
 export class EmbeddedBridge extends EventEmitter {
@@ -67,6 +70,7 @@ export class EmbeddedBridge extends EventEmitter {
 
   private opts: BridgeStartOpts | null = null
   private diagWaiters = new Map<string, (msg: ExtMessage | null) => void>()
+  private modelWaiters = new Map<string, (msg: ExtMessage | null) => void>()
   private starting = false
 
   // --------------------------------------------------------------- lifecycle
@@ -309,6 +313,7 @@ export class EmbeddedBridge extends EventEmitter {
 
     job.status = 'running'
     this.inFlightId = id
+    const cfg = configStore.get()
 
     const sent = this.send({
       type: 'job',
@@ -317,7 +322,10 @@ export class EmbeddedBridge extends EventEmitter {
       conversationId: job.conversationId,
       newChat: job.newChat,
       image: job.image,
-      timeoutMs: job.timeoutMs
+      timeoutMs: job.timeoutMs,
+      // Extension chỉ áp khi mở khung chat mới (hỏi tiếp chat cũ thì giữ nguyên model của chat đó).
+      model: cfg.gptModel || '',
+      effort: cfg.gptEffort || ''
     })
 
     if (!sent) {
@@ -371,12 +379,37 @@ export class EmbeddedBridge extends EventEmitter {
           this.markError(msg.jobId, message)
         }
         break
+      case 'modelsResult': {
+        const w = msg.reqId ? this.modelWaiters.get(msg.reqId) : undefined
+        if (w) w(msg)
+        break
+      }
       case 'diagResult': {
         const w = msg.reqId ? this.diagWaiters.get(msg.reqId) : undefined
         if (w) w(msg)
         break
       }
     }
+  }
+
+  /** Hỏi extension danh sách model + mức suy luận đang có trong menu chọn model của ChatGPT. */
+  async listModels(timeoutMs = 20_000): Promise<GptModelList> {
+    if (!this.isExtensionConnected()) throw new Error('Extension chưa kết nối')
+    if (this.inFlightId) throw new Error('Đang có job chạy — đợi xong rồi lấy danh sách model')
+    const reqId = randomUUID()
+    const msg = await new Promise<ExtMessage | null>((resolve) => {
+      const done = (m: ExtMessage | null): void => {
+        clearTimeout(timer)
+        this.modelWaiters.delete(reqId)
+        resolve(m)
+      }
+      const timer = setTimeout(() => done(null), timeoutMs)
+      this.modelWaiters.set(reqId, done)
+      if (!this.send({ type: 'listModels', reqId })) done(null)
+    })
+    if (!msg) throw new Error('Extension không phản hồi (cần extension 0.1.13 trở lên)')
+    if (msg.error) throw new Error(msg.error)
+    return msg.data || { models: [], efforts: [], current: '', currentEffort: '' }
   }
 
   /** Nhờ extension chụp tab + dump DOM (khi câu trả lời hỏng/timeout) → lưu vào thư mục diagnostics.

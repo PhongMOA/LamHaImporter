@@ -10,7 +10,7 @@
 // Tuần tự (Bridge 1 job/lần), throttle né rate-limit, retry backoff, resume qua queue.
 // ============================================================================
 
-import type { JobRow, Attribute, AskResult, ExtractRule } from '@shared/types'
+import type { JobRow, Attribute, AskResult, ExtractRule, ProductDraft } from '@shared/types'
 import { queueStore } from './queueStore'
 import { SiteClient } from './siteClient'
 import { configStore } from './config'
@@ -127,6 +127,11 @@ function safeParseImages(json: string | null): ImageSlot[] {
   }
 }
 
+/** SEO nhập tay trong Excel (cột "Tiêu đề"/"Mô tả") — ô có giá trị thì thắng AI. */
+function manualSeo(draft: ProductDraft): { meta_title: string; meta_desc: string } {
+  return { meta_title: (draft.seoTitle || '').trim(), meta_desc: (draft.seoDesc || '').trim() }
+}
+
 /** SEO "đủ dữ liệu" = có cả meta_title, meta_desc và ít nhất 1 tag.
  *  `requireTags=false` (cấu hình tắt tạo tag) → chỉ cần meta_title + meta_desc. */
 function isSeoComplete(seoJson: string | null, requireTags = true): boolean {
@@ -171,6 +176,9 @@ async function generateContent(
   const imageRequests = activeImageRequests(cfg)
   // Tắt cấu hình tạo tag → prompt SEO không xin tags, thiếu tag không tính là lỗi, đăng không gửi tag.
   const seoTagEnabled = cfg.seoTagEnabled !== false
+  // Tắt sinh SEO → bỏ hẳn task SEO; đăng chỉ dùng tiêu đề/mô tả nhập tay trong Excel.
+  const seoEnabled = cfg.seoEnabled !== false
+  const manual = manualSeo(draft)
 
   const health = embeddedBridge.health()
   if (!health.extensionConnected) {
@@ -292,8 +300,14 @@ async function generateContent(
   }
 
   // ===== Task 3: SEO (title + desc + tags) — prompt tự chứa ngữ cảnh =====
+  // Excel đã có đủ tiêu đề + mô tả và không cần tag → khỏi hỏi AI, lấy luôn bản nhập tay.
   ckCancel()
-  if (!isSeoComplete(seoJson, seoTagEnabled)) {
+  if (seoEnabled && !seoTagEnabled && manual.meta_title && manual.meta_desc && !isSeoComplete(seoJson, false)) {
+    seoJson = JSON.stringify({ ...manual, tags: [] })
+    queueStore.markStageB(job.id, { seo_json: seoJson })
+    emit({ ...base, status: 'content', message: '✓ SEO lấy từ Excel' })
+  }
+  if (seoEnabled && !isSeoComplete(seoJson, seoTagEnabled)) {
     emit({ ...base, status: 'generating', message: 'Đang sinh SEO (AI)...' })
     try {
       const seoRes = await askWithNewChatFallback(
@@ -305,8 +319,11 @@ async function generateContent(
       const seo = parseSeo(seoRes.answer, seoRes.rawAnswer)
       // Tắt tạo tag → bỏ luôn tags AI lỡ trả về, để checkpoint không lưu tag thừa.
       const tags = seoTagEnabled ? seo.tags : []
-      if (seo.meta_title && seo.meta_desc && (!seoTagEnabled || tags.length > 0)) {
-        seoJson = JSON.stringify({ meta_title: seo.meta_title, meta_desc: seo.meta_desc, tags })
+      // Ô Excel có giá trị → thắng AI (AI chỉ bù ô trống + tags).
+      const meta_title = manual.meta_title || seo.meta_title
+      const meta_desc = manual.meta_desc || seo.meta_desc
+      if (meta_title && meta_desc && (!seoTagEnabled || tags.length > 0)) {
+        seoJson = JSON.stringify({ meta_title, meta_desc, tags })
         queueStore.markStageB(job.id, { seo_json: seoJson })
         const tagNote = seoTagEnabled ? `${tags.length} tags` : 'không tạo tag'
         emit({ ...base, status: 'content', message: `✓ Xong SEO (${tagNote})` })
@@ -396,7 +413,8 @@ async function generateContent(
   const totalImgs = detailOk && wantImages ? extractImagePlaceholders(rawDetail).length : 0
   const okImgs = images.filter((s) => !!s?.url).length
   const imagesOk = detailOk && okImgs >= totalImgs
-  const contentOk = detailOk && attributes.length > 0 && isSeoComplete(seoJson, seoTagEnabled) && imagesOk
+  const seoOk = !seoEnabled || isSeoComplete(seoJson, seoTagEnabled)
+  const contentOk = detailOk && attributes.length > 0 && seoOk && imagesOk
 
   if (contentOk) {
     queueStore.markStageB(job.id, { stage_b: 'content', last_error: null })
@@ -435,13 +453,19 @@ async function upsertContent(job: JobRow, client: SiteClient, emit: (p: StagePro
   // chỉ gửi field bổ sung để không đụng field Pha A đã set
   const form: Record<string, unknown> = { detail, attributes }
   const extra: Record<string, unknown> = {}
-  if (job.seo_json) {
+  const cfg = configStore.get()
+  // Tắt sinh SEO → bỏ qua SEO AI đã checkpoint (job cũ), chỉ gửi bản nhập tay trong Excel.
+  const seoEnabled = cfg.seoEnabled !== false
+  const manual = manualSeo(queueStore.getDraft(job))
+  if (manual.meta_title) form.meta_title = manual.meta_title
+  if (manual.meta_desc) form.meta_desc = manual.meta_desc
+  if (seoEnabled && job.seo_json) {
     try {
       const seo = JSON.parse(job.seo_json) as { meta_title?: string; meta_desc?: string; tags?: string[] }
-      if (seo.meta_title) form.meta_title = seo.meta_title
-      if (seo.meta_desc) form.meta_desc = seo.meta_desc
+      if (seo.meta_title && !form.meta_title) form.meta_title = seo.meta_title
+      if (seo.meta_desc && !form.meta_desc) form.meta_desc = seo.meta_desc
       // Tắt tạo tag → KHÔNG gửi tag/new_tag (chặn cả job cũ đã checkpoint sẵn tags trước khi tắt).
-      const seoTagEnabled = configStore.get().seoTagEnabled !== false
+      const seoTagEnabled = cfg.seoTagEnabled !== false
       const tags = seoTagEnabled ? (seo.tags || []).map((t) => String(t).trim()).filter(Boolean) : []
       if (tags.length) {
         // tag là taxonomy: gửi tempId trong form.tag + new_tag (controller resolve-or-create theo meta_slug).

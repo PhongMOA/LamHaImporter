@@ -64,6 +64,23 @@ export function ProductTable({ drafts }: { drafts: ProductDraft[] }): React.Reac
           }
         },
         {
+          title: 'SEO (Excel)',
+          width: 110,
+          align: 'center',
+          render: (_, r) => {
+            const have = [r.seoTitle && 'Tiêu đề', r.seoDesc && 'Mô tả'].filter(Boolean)
+            if (!have.length) return <span style={{ fontSize: 12, color: '#9fb2ae' }}>—</span>
+            const text = [r.seoTitle && `Tiêu đề: ${r.seoTitle}`, r.seoDesc && `Mô tả: ${r.seoDesc}`]
+              .filter(Boolean)
+              .join('\n')
+            return (
+              <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{text}</span>}>
+                <Tag color={have.length === 2 ? 'blue' : 'cyan'}>{have.length}/2</Tag>
+              </Tooltip>
+            )
+          }
+        },
+        {
           title: 'BH',
           dataIndex: 'warranty',
           width: 56,

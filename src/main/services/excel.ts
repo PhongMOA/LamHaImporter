@@ -87,6 +87,8 @@ export function parseExcel(filePath: string, opts: ParseOptions): ParseResult {
       imageSlug,
       imageFiles: [],
       alsoBuyLinks: looksLikeNote(alsoBuyRaw) ? [] : splitLinks(alsoBuyRaw),
+      seoTitle: cell(row, col.seoTitle),
+      seoDesc: cell(row, col.seoDesc),
       errors: []
     }
 

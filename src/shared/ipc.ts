@@ -12,7 +12,8 @@ import type {
   RunRow,
   JobRow,
   ProductDraft,
-  SitePingResult
+  SitePingResult,
+  GptModelList
 } from './types'
 
 export const IPC = {
@@ -30,6 +31,7 @@ export const IPC = {
   // bridge
   bridgeHealth: 'bridge:health',
   bridgeAsk: 'bridge:ask',
+  bridgeListModels: 'bridge:listModels',
   // site
   sitePing: 'site:ping',
   // excel/import
@@ -113,6 +115,7 @@ export interface Api {
       prompt: string,
       opts?: { newChat?: boolean; conversationId?: string; timeoutMs?: number; extract?: ExtractRule }
     ): Promise<AskResult>
+    listModels(): Promise<GptModelList>
   }
   site: {
     ping(siteId: string): Promise<SitePingResult>

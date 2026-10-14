@@ -59,6 +59,10 @@ export interface ProductDraft {
   imageSlug: string // cột 4 — tiền tố tên file ảnh
   imageFiles: string[] // đường dẫn ảnh local đã match (tuyệt đối)
   alsoBuyLinks: string[]
+  // SEO Meta nhập tay từ Excel (cột "Tiêu đề"/"Mô tả", có thể trống). Có giá trị → dùng thay AI.
+  // Optional: draft_json của job cũ không có 2 field này.
+  seoTitle?: string
+  seoDesc?: string
   errors: string[] // cảnh báo lúc parse (thiếu ảnh, taxonomy needCreate...)
 }
 
@@ -104,6 +108,13 @@ export interface AppConfig {
   // Bật/tắt tạo tag SEO cho sản phẩm. Tắt → prompt SEO KHÔNG xin tags, không coi thiếu tag là lỗi,
   // và lúc đăng KHÔNG gửi tag/new_tag lên site (meta_title/meta_desc vẫn chạy bình thường).
   seoTagEnabled: boolean
+  // Bật/tắt bước sinh SEO (tiêu đề + mô tả + tag) bằng AI. Tắt → bỏ qua bước SEO, thiếu SEO không
+  // tính là lỗi; lúc đăng chỉ gửi tiêu đề/mô tả SEO nhập tay trong Excel (nếu có), không gửi tag.
+  seoEnabled: boolean
+  // Model ChatGPT tự chọn mỗi khi mở khung chat mới (tên hiển thị, vd "GPT-6.1 Sol"); '' = giữ mặc định.
+  gptModel: string
+  // Mức suy luận: none|minimal|low|medium|high|xhigh|max|ultra|persistent; '' = giữ mặc định.
+  gptEffort: string
   imageProcess: ImageProcessConfig // xử lý ảnh (resize vuông + nén webp) trước khi upload
   // Bật/tắt tạo ảnh nội dung. Tắt → bài KHÔNG có ảnh kèm (không chèn placeholder, không vẽ ảnh).
   detailImageEnabled: boolean
@@ -174,6 +185,14 @@ export interface QueueStats {
 // ============================================================================
 // Bridge (embedded GPT) — kết quả health + ask.
 // ============================================================================
+
+/** Danh sách model đọc từ menu chọn model của ChatGPT (qua extension). */
+export interface GptModelList {
+  models: string[] // tên model trong menu (kể cả menu con)
+  efforts: { value: string; label: string }[] // mức suy luận
+  current: string // model đang chọn
+  currentEffort: string
+}
 
 export interface BridgeHealth {
   running: boolean // hub WS đã start chưa
