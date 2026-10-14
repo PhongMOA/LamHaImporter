@@ -47,6 +47,9 @@ export function parseCodeBlocks(md: string): CodeBlock[] {
   return blocks
 }
 
+const HTML_LANGS = ['html', 'xml', 'htm', 'xhtml']
+const LANG_ALIASES: Record<string, string[]> = { html: HTML_LANGS, htm: HTML_LANGS, xhtml: HTML_LANGS }
+
 export function applyExtract(
   rawAnswer: string,
   extract: ExtractRule | null | undefined
@@ -62,7 +65,11 @@ export function applyExtract(
     const join = typeof extract?.join === 'string' ? extract.join : '\n\n'
 
     let blocks = parseCodeBlocks(raw)
-    if (lang) blocks = blocks.filter((b) => b.lang === lang)
+    if (lang) {
+      // ChatGPT hay gắn nhãn sai cho khối HTML (đoán "XML" lúc đang render) → coi là cùng loại.
+      const same = LANG_ALIASES[lang] || [lang]
+      blocks = blocks.filter((b) => same.includes(b.lang))
+    }
 
     if (blocks.length === 0) {
       const where = lang ? `code block ngôn ngữ "${lang}"` : 'code block'
