@@ -414,7 +414,11 @@ export class EmbeddedBridge extends EventEmitter {
 
   /** Nhờ extension chụp tab + dump DOM (khi câu trả lời hỏng/timeout) → lưu vào thư mục diagnostics.
    *  Trả về đoạn đuôi " | Ảnh chụp: ... | Chẩn đoán: ..." để nối vào lỗi/cảnh báo; '' nếu không lấy được. */
-  private async captureDiagSuffix(jobId: string, timeoutMs = 12_000): Promise<string> {
+  private async captureDiagSuffix(
+    jobId: string,
+    extra?: Record<string, unknown>,
+    timeoutMs = 12_000
+  ): Promise<string> {
     const reqId = randomUUID()
     const msg = await new Promise<ExtMessage | null>((resolve) => {
       const done = (m: ExtMessage | null): void => {
@@ -427,8 +431,8 @@ export class EmbeddedBridge extends EventEmitter {
       if (!this.send({ type: 'diag', reqId })) done(null)
     })
     if (!msg || (!msg.diag && !msg.screenshot)) return ''
-    const saved = saveExtensionDiagnostics(jobId, msg.diag, msg.screenshot)
-    let s = saved.screenshot ? ` | Ảnh chụp: ${saved.screenshot}` : ' | (không chụp được ảnh tab)'
+    const saved = saveExtensionDiagnostics(jobId, msg.diag, msg.screenshot, extra)
+    let s =saved.screenshot ? ` | Ảnh chụp: ${saved.screenshot}` : ' | (không chụp được ảnh tab)'
     if (saved.json) s += ` | Chẩn đoán: ${saved.json}`
     return s
   }
@@ -438,7 +442,11 @@ export class EmbeddedBridge extends EventEmitter {
   private settleWithDiag(job: InternalJob, status: JobStatus, apply: (suffix: string) => void): void {
     this.clearInFlightTimer()
     job.diagPending = true
-    void this.captureDiagSuffix(job.id)
+    // Kèm chuỗi extension ĐÃ GỬI về app: DOM lúc chụp thường đã đủ, phải so với cái app thực nhận
+    // mới biết lỗi ở extension (đọc sai nguồn) hay ở GPT.
+    const raw = job.rawAnswer || ''
+    const extra = { rawAnswerLen: raw.length, rawAnswerHead: raw.slice(0, 3000), rawAnswerTail: raw.slice(-500) }
+    void this.captureDiagSuffix(job.id, extra)
       .catch(() => '')
       .then((suffix) => {
         job.diagPending = false

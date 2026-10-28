@@ -16,7 +16,8 @@ export function diagnosticsDir(): string {
 export function saveExtensionDiagnostics(
   jobId: string,
   diag: unknown,
-  screenshot: string | null | undefined
+  screenshot: string | null | undefined,
+  extra?: Record<string, unknown>
 ): { screenshot?: string; json?: string; html?: string } {
   const out: { screenshot?: string; json?: string; html?: string } = {}
   try {
@@ -40,7 +41,7 @@ export function saveExtensionDiagnostics(
         writeFileSync(out.html, html, 'utf8')
       }
       out.json = `${base}.json`
-      writeFileSync(out.json, JSON.stringify(rest, null, 2), 'utf8')
+      writeFileSync(out.json, JSON.stringify({ ...rest, ...extra }, null, 2), 'utf8')
     }
     prune(dir)
   } catch (e) {
