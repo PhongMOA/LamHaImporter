@@ -64,11 +64,23 @@ export function applyExtract(
     const select = extract?.select === 'first' || extract?.select === 'last' ? extract.select : 'all'
     const join = typeof extract?.join === 'string' ? extract.join : '\n\n'
 
-    let blocks = parseCodeBlocks(raw)
-    if (lang) {
-      // ChatGPT hay gắn nhãn sai cho khối HTML (đoán "XML" lúc đang render) → coi là cùng loại.
-      const same = LANG_ALIASES[lang] || [lang]
-      blocks = blocks.filter((b) => same.includes(b.lang))
+    // ChatGPT hay gắn nhãn sai cho khối HTML (đoán "XML" lúc đang render) → coi là cùng loại.
+    const same = lang ? LANG_ALIASES[lang] || [lang] : null
+    const pick = (md: string): CodeBlock[] => {
+      const all = parseCodeBlocks(md)
+      return same ? all.filter((b) => same.includes(b.lang)) : all
+    }
+    let blocks = pick(raw)
+    // SSE (10-2026) rơi mất token ĐẦU mỗi message → mất fence MỞ: chuỗi về app dạng
+    // "html\n<h2>...</p>\n```" hoặc "...lời dẫn suy đoán.html\n<h2>..." (nhãn dính cuối câu dẫn),
+    // chỉ còn fence đóng → parser coi nó là fence mở của khối rỗng. Chèn lại fence trước nhãn lang đầu tiên.
+    const fenceCount = (raw.match(/`{3,}|~{3,}/g) || []).length
+    if (blocks.length === 0 && same && fenceCount % 2 === 1) {
+      const label = new RegExp(`(^|[^A-Za-z0-9_])(${same.join('|')})[ \\t]*\\r?\\n`, 'i').exec(raw)
+      if (label) {
+        const at = label.index + label[1].length
+        blocks = pick(raw.slice(0, at) + '\n```' + raw.slice(at))
+      }
     }
 
     if (blocks.length === 0) {
